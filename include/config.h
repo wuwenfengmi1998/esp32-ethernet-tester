@@ -1,6 +1,11 @@
 #pragma once
 
 // =============================================================================
+// Firmware Version
+// =============================================================================
+#define FW_VERSION  "1.0.0"
+
+// =============================================================================
 // Hardware Pin Configuration
 // Waveshare ESP32-S3-POE-ETH (onboard WIZnet W5500 over FSPI)
 // Pin mapping per Waveshare ESP32-S3-ETH wiki.

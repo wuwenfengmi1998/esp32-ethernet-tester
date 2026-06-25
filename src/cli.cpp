@@ -21,6 +21,8 @@
 #include <WiFi.h>
 #include <esp_timer.h>
 #include <lwip/sockets.h>
+#include <SD.h>
+#include <LittleFS.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -50,7 +52,7 @@ void CLI::begin()
 {
     Serial.println();
     Serial.println("============================================");
-    Serial.println("  ESP32 Ethernet Tester  (W5500 MACRAW)");
+    Serial.printf( "  Ethernet Tester v%s  (W5500 MACRAW)\r\n", FW_VERSION);
     Serial.println("  Type 'help' for command list.");
     Serial.println("============================================");
     _printPrompt();
@@ -1644,7 +1646,27 @@ String CLI::statusJson()
     j += "\"tx_errors\":"; j += s.txErrors; j += ",";
     j += "\"rx_dropped\":";j += s.rxDropped; j += ",";
     j += "\"storm\":\"";      j += _inj.isStormActive() ? "active" : "idle"; j += "\",";
-    j += "\"continuous\":\""; j += _inj.isContinuousActive() ? _inj.continuousName() : "idle"; j += "\"";
+    j += "\"continuous\":\""; j += _inj.isContinuousActive() ? _inj.continuousName() : "idle"; j += "\",";
+    // System info
+    j += "\"heap_free\":"; j += ESP.getFreeHeap(); j += ",";
+    j += "\"heap_min\":";  j += ESP.getMinFreeHeap(); j += ",";
+    j += "\"psram_free\":"; j += ESP.getFreePsram(); j += ",";
+    j += "\"uptime_s\":";  j += (uint32_t)(esp_timer_get_time() / 1000000ULL); j += ",";
+    // SD card storage
+    j += "\"sd_present\":"; j += pcapSdAvailable() ? "true" : "false"; j += ",";
+    if (pcapSdAvailable()) {
+        j += "\"sd_total_mb\":"; j += (uint32_t)(SD.totalBytes() / (1024 * 1024)); j += ",";
+        j += "\"sd_used_mb\":";  j += (uint32_t)(SD.usedBytes()  / (1024 * 1024)); j += ",";
+    }
+    // LittleFS (internal flash)
+    j += "\"fs_total_kb\":"; j += (uint32_t)(LittleFS.totalBytes() / 1024); j += ",";
+    j += "\"fs_used_kb\":";  j += (uint32_t)(LittleFS.usedBytes()  / 1024); j += ",";
+    // PCAP file
+    j += "\"pcap_size\":"; j += pcapSize(); j += ",";
+    // Mgmt IP (Wi-Fi)
+    j += "\"mgmt_ip\":\""; j += WiFi.localIP().toString(); j += "\",";
+    // Version
+    j += "\"version\":\""; j += FW_VERSION; j += "\"";
     j += "}";
     return j;
 }

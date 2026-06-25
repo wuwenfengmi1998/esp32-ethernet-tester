@@ -267,7 +267,7 @@ void discoveryAdvertInit(DiscoveryAdvert &a)
     memset(&a, 0, sizeof(a));
     strncpy(a.sysName,  "ESP32-Tester",          sizeof(a.sysName)  - 1);
     strncpy(a.portId,   "esp32/0",               sizeof(a.portId)   - 1);
-    strncpy(a.platform, "ESP32 Ethernet Tester", sizeof(a.platform) - 1);
+    snprintf(a.platform, sizeof(a.platform), "Ethernet Tester v%s", FW_VERSION);
     a.lldpEnabled = false;
     a.cdpEnabled  = false;
     a.mgmtIp      = 0;

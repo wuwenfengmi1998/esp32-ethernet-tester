@@ -13,27 +13,30 @@
 static const char INDEX_HTML[] PROGMEM = R"HTML(
 <!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ESP32 Ethernet Tester</title>
+<title>Ethernet Tester</title>
 <style>
 :root{--bg:#0f1419;--card:#161b22;--border:#30363d;--text:#e6e6e6;--dim:#8b949e;
  --green:#238636;--warn:#9e6a03;--stop:#b62324;--accent:#1f6feb;--input:#0d1117;
  --ok:#3fb950;--bad:#f85149}
 *{box-sizing:border-box}
 body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--text);font-size:14px}
-header{background:var(--accent);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
-header h1{margin:0;font-size:16px;font-weight:600}
+header{background:var(--accent);padding:6px 16px;position:sticky;top:0;z-index:100}
+.hdr-top{display:flex;align-items:center;justify-content:space-between}
+header h1{margin:0;font-size:15px;font-weight:600}
 .hdr-btns{display:flex;gap:6px;align-items:center}
 .hdr-btns button{font-size:12px;padding:5px 10px}
 .hdr-btns select{font-size:12px;padding:3px 6px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:4px}
 #layoutToggle{font-size:11px;padding:4px 8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:4px;cursor:pointer}
+.hdr-stats{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;padding:4px 0 0;opacity:.9}
+.hdr-stats span{background:rgba(0,0,0,.25);border-radius:10px;padding:2px 8px;white-space:nowrap}
 
 /* Desktop layout: output left, controls right */
-.desktop .main{display:grid;grid-template-columns:1fr 1fr;gap:0;height:calc(100vh - 44px);overflow:hidden}
+.desktop .main{display:grid;grid-template-columns:1fr 1fr;gap:0;height:calc(100vh - 68px);overflow:hidden}
 .desktop .panel-left{overflow-y:auto;padding:12px;border-right:1px solid var(--border)}
 .desktop .panel-right{overflow-y:auto;padding:12px}
 
 /* Mobile layout: single column, output at top (collapsible) */
-.mobile .main{display:flex;flex-direction:column;min-height:calc(100vh - 44px)}
+.mobile .main{display:flex;flex-direction:column;min-height:calc(100vh - 68px)}
 .mobile .panel-left{order:1;padding:8px;max-height:200px;overflow-y:auto;border-bottom:1px solid var(--border);flex-shrink:0}
 .mobile .panel-right{order:2;padding:8px;overflow-y:auto;flex:1}
 .mobile .panel-left.collapsed{max-height:36px;overflow:hidden}
@@ -51,7 +54,7 @@ input,select{background:var(--input);border:1px solid var(--border);color:var(--
 .row>button{flex:0 0 auto}
 pre{background:var(--input);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;
  white-space:pre-wrap;word-break:break-all;overflow-y:auto;margin:0;flex:1;min-height:100px}
-.desktop pre{height:calc(100vh - 160px)}
+.desktop pre{height:calc(100vh - 180px)}
 .mobile pre{max-height:140px}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
 .status-bar{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;padding:6px 0;margin-bottom:6px}
@@ -64,17 +67,26 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
 }
 </style></head><body class="desktop">
 <header>
- <h1>ESP32 Ethernet Tester</h1>
- <div class="hdr-btns">
-  <span id="stLink" class="pill">--</span>
-  <span id="stSpeed" class="pill">--</span>
-  <select id="ri" onchange="setAuto()" title="Auto-refresh">
-   <option value="0">Off</option><option value="1000">1s</option>
-   <option value="2000" selected>2s</option><option value="5000">5s</option>
-  </select>
-  <button onclick="refresh()">&#8635;</button>
-  <button class="stop" onclick="reboot()" title="Reboot">&#9211; Reboot</button>
-  <button id="layoutToggle" onclick="toggleLayout()">Mobile</button>
+ <div class="hdr-top">
+  <h1>Ethernet Tester</h1>
+  <div class="hdr-btns">
+   <select id="ri" onchange="setAuto()" title="Auto-refresh">
+    <option value="0">Off</option><option value="1000">1s</option>
+    <option value="2000" selected>2s</option><option value="5000">5s</option>
+   </select>
+   <button onclick="refresh()">&#8635;</button>
+   <button class="stop" onclick="reboot()" title="Reboot">&#9211; Reboot</button>
+   <button id="layoutToggle" onclick="toggleLayout()">Mobile</button>
+  </div>
+ </div>
+ <div class="hdr-stats" id="hdrStats">
+  <span id="hsLink">Link: --</span>
+  <span id="hsMgmt">Mgmt: --</span>
+  <span id="hsIP">Eth IP: --</span>
+  <span id="hsHeap">Heap: --</span>
+  <span id="hsSd">SD: --</span>
+  <span id="hsUp">Up: --</span>
+  <span id="hsVer"></span>
  </div>
 </header>
 <div class="main">
@@ -389,12 +401,28 @@ function modeUi(){let ap=v('wmode')=='ap';
 function reboot(){if(!confirm('Reboot the device now?'))return;
  document.getElementById('log').textContent='Rebooting... reconnect in a few seconds.';cmd('reboot');}
 function refresh(){fetch('/api/status').then(r=>r.json()).then(s=>{
+ // Header stats bar
  let link=s.link||'--',spd=(s.speed||'--')+' '+(s.duplex||'');
- document.getElementById('stLink').innerHTML='<span class="'+(link=='UP'?'ok':'bad')+'">'+link+'</span>';
- document.getElementById('stSpeed').textContent=spd;
- let h='';for(let k in s){let val=s[k];
+ document.getElementById('hsLink').innerHTML='Link: <b class="'+(link=='UP'?'ok':'bad')+'">'+link+'</b> '+spd;
+ document.getElementById('hsMgmt').textContent='Mgmt: '+location.hostname;
+ document.getElementById('hsIP').textContent='Eth: '+(s.ip||'--');
+ let heapK=s.heap_free?Math.round(s.heap_free/1024)+'K':'--';
+ document.getElementById('hsHeap').textContent='Heap: '+heapK;
+ if(s.sd_present)document.getElementById('hsSd').innerHTML='SD: <b class="ok">'+(s.sd_used_mb||0)+'/'+(s.sd_total_mb||0)+' MB</b>';
+ else document.getElementById('hsSd').innerHTML='SD: <span class="bad">none</span>';
+ let up=s.uptime_s||0,um=Math.floor(up/60),uh=Math.floor(um/60);
+ document.getElementById('hsUp').textContent='Up: '+(uh?uh+'h ':'')+(um%60)+'m';
+ document.getElementById('hsVer').textContent='v'+s.version;
+ // Status table
+ const labels={link:'Link',speed:'Speed',duplex:'Duplex',mac:'MAC',ip:'Eth IP',mask:'Mask',gateway:'Gateway',
+  tx_frames:'TX frames',rx_frames:'RX frames',tx_errors:'TX errors',rx_dropped:'RX dropped',
+  storm:'Storm',continuous:'Continuous',heap_free:'Heap free',heap_min:'Heap min',
+  psram_free:'PSRAM free',uptime_s:'Uptime (s)',sd_present:'SD card',sd_total_mb:'SD total (MB)',
+  sd_used_mb:'SD used (MB)',fs_total_kb:'Flash FS total (KB)',fs_used_kb:'Flash FS used (KB)',pcap_size:'PCAP file (B)',version:'Version'};
+ let h='';for(let k in s){let val=s[k],lbl=labels[k]||k;
   if(k=='link')val='<span class="'+(val=='UP'?'ok':'bad')+'">'+val+'</span>';
-  h+='<tr><td>'+k+'</td><td>'+val+'</td></tr>';}
+  if(k=='sd_present')val=val?'<span class="ok">yes</span>':'<span class="bad">no</span>';
+  h+='<tr><td>'+lbl+'</td><td>'+val+'</td></tr>';}
  document.getElementById('st').innerHTML=h;}).catch(()=>{});}
 let autoTimer=null;
 function setAuto(){let ms=parseInt(document.getElementById('ri').value);
