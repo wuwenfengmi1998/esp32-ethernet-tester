@@ -21,7 +21,13 @@ Wi-Fi web interface provides remote control.
 - [Serial CLI Reference](#serial-cli-reference)
 - [Wi-Fi & Web Interface](#wi-fi--web-interface)
 - [L3 / DHCP Testing](#l3--dhcp-testing)
+- [802.1X / EAP Authentication](#8021x--eap-authentication)
 - [LLDP / CDP](#lldp--cdp)
+- [FHRP (HSRP / VRRP)](#fhrp-hsrp--vrrp)
+- [DHCPv6](#dhcpv6)
+- [DNS Tools](#dns-tools)
+- [SNMP Recon](#snmp-recon)
+- [Rogue Authenticator](#rogue-authenticator)
 - [RFC 2544 Suite](#rfc-2544-suite)
 - [Architecture](#architecture)
 - [Configuration (NVS)](#configuration-nvs)
@@ -40,10 +46,23 @@ Wi-Fi web interface provides remote control.
 | **RFC 2544** | Throughput, latency, frame-loss, back-to-back (requires DUT loopback) |
 | **LLDP / CDP** | Passive neighbour discovery (decode) **and** configurable advertisement (TX) |
 | **L3 / IP** | Minimal ARP/IP/UDP/ICMP stack; ping; static or DHCP addressing |
-| **DHCP testing** | Full DORA verification plus six failure/abuse scenarios |
+| **DHCP testing** | Full DORA verification plus six failure/abuse scenarios + rogue server |
+| **DHCPv6** | Stateful IPv6 server discovery (SOLICIT) and rogue DHCPv6 server |
+| **DNS** | Unicast DNS A-record resolution and rogue DNS responder (spoof) |
 | **mDNS probe** | Resolve `<host>.local` over multicast DNS and ping for reachability |
+| **802.1X / EAP** | Full supplicant: EAP-MD5, EAP-TLS, PEAPv0/MSCHAPv2, EAP-TTLS (PAP + MSCHAPv2) |
+| **Rogue authenticator** | Fake 802.1X authenticator to harvest EAP-MD5 / MSCHAPv2 credentials |
+| **EAPOL attacks** | Start-flood, spoofed logoff, MAB probe |
+| **IPv6 / NDP** | Passive NDP decode (RS/RA/NS/NA) and rogue Router Advertisement (SLAAC takeover) |
+| **FHRP (HSRP/VRRP)** | Passive decode of HSRP/VRRP advertisements + gateway hijack |
+| **L2 attacks** | 802.1Q VLAN inject, Q-in-Q hop, DTP spoof, CAM flood, STP root/TCN, LLDP/CDP flood |
+| **ARP tools** | Gratuitous ARP, ARP MITM spoof, ARP storm, ARP scan |
+| **SNMP recon** | Community-string probe (sysDescr) and IP-range sweep |
+| **Port scanning** | TCP SYN scan, banner grab, common-port scan |
+| **Reconnaissance** | Passive host/protocol mapping, ICMP ping sweep, traceroute |
+| **PCAP capture** | Capture frames to LittleFS file, downloadable from web UI |
 | **Wi-Fi web UI** | STA auto-connect (NVS creds) with AP fallback; async control page + JSON API |
-| **Persistence** | Wi-Fi credentials, hostname, and IP config stored in NVS |
+| **Persistence** | Wi-Fi credentials, hostname, IP config, 802.1X creds stored in NVS |
 
 ---
 
@@ -51,53 +70,38 @@ Wi-Fi web interface provides remote control.
 
 | Item | Detail |
 |------|--------|
-| MCU | ESP-WROOM-32 dev board (USB, 3.3 V regulator on board) |
-| Ethernet | WIZnet **W5500 Lite** module (3.3 V only — **no onboard regulator**) |
-| Interface | VSPI @ 8 MHz (see note below) |
+| MCU | Waveshare **ESP32-S3-POE-ETH** (ESP32-S3, USB-C, 16 MB flash, 8 MB PSRAM) |
+| Ethernet | Onboard WIZnet **W5500** (PoE-capable carrier) |
+| Interface | FSPI @ 8 MHz (see note below) |
 
-> The W5500 Lite is a **3.3 V-only** board. Power it from the ESP32 **3V3**
-> pin, *not* 5V/VIN. The SPI clock is set to **8 MHz** in
-> [include/config.h](include/config.h) for reliable operation over
-> dupont/breadboard wiring; raise toward 40 MHz only on short wires or a clean
-> PCB.
+> Ethernet, W5500 power, and (optional) PoE are all onboard — no external
+> wiring is required. The SPI clock is set to **8 MHz** in
+> [include/config.h](include/config.h); it can be raised toward 40 MHz since
+> the W5500 is connected over short onboard PCB traces.
 
 ---
 
 ## Wiring
 
-W5500 Lite ⟷ ESP-WROOM-32 (pins defined in [include/config.h](include/config.h)):
+The W5500 is integrated on the Waveshare ESP32-S3-POE-ETH board, so no external
+Ethernet wiring is needed. The onboard SPI mapping (defined in
+[include/config.h](include/config.h)) is:
 
-| W5500 Lite pin | ESP32 GPIO | Notes |
-|----------------|------------|-------|
-| 3V3 (×2)       | 3V3        | Both 3V3 pins to 3.3 V |
-| GND (×2 + ×2)  | GND        | Tie all grounds together |
-| MOSI           | 23         | VSPI MOSI |
-| MISO           | 19         | VSPI MISO |
-| SCLK           | 18         | VSPI SCK |
-| CS             | 5          | Chip select |
-| RST            | 17         | Hardware reset (moved off GPIO2 strapping pin) |
-| INT            | 4          | Not used in polling mode |
-| NC             | —          | Leave unconnected |
-
-```
- ESP32                      W5500 Lite
- ┌──────────┐               ┌──────────┐
- │ 3V3 ─────┼───────────────┤ 3V3 ×2   │
- │ GND ─────┼───────────────┤ GND ×4   │
- │ G23 MOSI ┼──────────────►│ MOSI     │
- │ G19 MISO │◄──────────────┤ MISO     │
- │ G18 SCK  ┼──────────────►│ SCLK     │
- │ G5  CS   ┼──────────────►│ CS       │
- │ G17 RST  ┼──────────────►│ RST      │
- └──────────┘               └──────────┘
-```
+| W5500 signal | ESP32-S3 GPIO | Notes |
+|--------------|---------------|-------|
+| MOSI         | 11            | FSPI MOSI |
+| MISO         | 12            | FSPI MISO |
+| SCLK         | 13            | FSPI SCK |
+| CS           | 14            | Chip select |
+| RST          | 9             | Hardware reset |
+| INT          | 10            | Not used in polling mode |
 
 ---
 
 ## Build & Flash
 
 This is a [PlatformIO](https://platformio.org/) project
-([platformio.ini](platformio.ini), `board = esp32dev`, Arduino framework).
+([platformio.ini](platformio.ini), `board = esp32-s3-devkitc-1`, Arduino framework).
 
 ```bash
 # Build
@@ -186,6 +190,68 @@ case-insensitive.
 | `dhcp malformed` | Send a malformed DISCOVER, expect the server to ignore it |
 | `dhcp renew [secs]` | Short lease, then unicast renew |
 | `probe <hostname>` | Resolve `<name>.local` via mDNS and ping it |
+| `dns resolve <host> [server]` | Unicast DNS A-record query (uses gateway if no server given) |
+
+### 802.1X / EAP (EAPOL Supplicant)
+| Command | Description |
+|---------|-------------|
+| `dot1x` | Show 802.1X method / credential status |
+| `dot1x method md5\|tls\|peap\|ttls-pap\|ttls-mschap` | Select EAP method |
+| `dot1x probe` | Detect whether the port enforces 802.1X |
+| `dot1x auth [user] [pass]` | Authenticate with the selected method |
+| `dot1x user <name>` | Set 802.1X identity (saved) |
+| `dot1x pass <password>` | Set EAP password (saved) |
+| `dot1x keypass <pw>` | Set EAP-TLS private-key passphrase (saved) |
+| `dot1x cert [clear ...]` | Show / remove uploaded certificates |
+| `dot1x logoff` | Send EAPOL-Logoff |
+
+### Reconnaissance
+| Command | Description |
+|---------|-------------|
+| `recon passive [secs]` | Passively map hosts/protocols (default 30 s) |
+| `recon sweep <start> <end>` | ICMP ping sweep of an address range |
+| `recon trace <ip> [maxhops]` | ICMP traceroute to a target |
+| `arp scan <start> <end>` | ARP sweep for live hosts (L2 discovery) |
+| `scan common <ip>` | TCP SYN scan of common ports |
+| `scan ports <ip> <first> <last>` | TCP SYN scan of a port range |
+| `scan banner <ip> <port> [probe]` | Banner grab via full TCP handshake |
+| `link [monitor [secs]]` | Link speed/duplex info or flap monitor |
+| `wifi scan` | Scan Wi-Fi (rogue-AP / evil-twin recon) |
+| `ipv6 listen [secs]` | Decode IPv6 NDP (RS/RA/NS/NA) |
+| `fhrp listen [secs]` | Decode HSRP/VRRP advertisements |
+| `dhcpv6 probe [secs]` | Discover DHCPv6 servers (SOLICIT) |
+| `snmp probe <ip>` | SNMP community-string probe (tries public/private/community/admin/snmp/monitor) |
+| `snmp sweep <start> <end> [comm]` | SNMP sweep of an IP range |
+| `pcap start [secs] [maxframes]` | Capture frames to `/capture.pcap` (web download) |
+| `pcap status \| delete` | Show or remove the stored capture |
+
+### Offensive / DoS Tests (require `arm`)
+| Command | Description |
+|---------|-------------|
+| `arm [on]` | Show or enable authorized (lab) mode |
+| `disarm` | Disable authorized mode |
+| `l2 vlan <vid> [pcp] [count]` | 802.1Q single-tag VLAN inject |
+| `l2 dtag <native> <target> [n]` | Double-tag (Q-in-Q) VLAN hop |
+| `l2 dtp` | DTP trunk-negotiation spoof |
+| `l2 macflood [count] [rate]` | CAM-table flood (random MACs) |
+| `l2 stp listen [secs]` | Decode STP/RSTP BPDUs |
+| `l2 stp root [prio] [secs]` | Claim root bridge (BPDU/Root Guard test) |
+| `l2 stp tcn [count]` | Inject topology-change BPDUs |
+| `l2 lldpflood [count]` | LLDP neighbour-table flood |
+| `l2 cdpflood [count]` | CDP neighbour-table flood |
+| `arp gratuitous <ip> [count]` | Gratuitous ARP announce |
+| `arp spoof <victim> <gw> [secs]` | ARP MITM (auto-restores on stop) |
+| `arp storm [count] [rate]` | ARP request flood |
+| `ipv6 rogue [lifetime] [count]` | Rogue Router Advertisement (SLAAC takeover) |
+| `fhrp hsrp <grp> <vip> [prio] [n]` | HSRP gateway hijack |
+| `fhrp vrrp <vrid> <vip> [prio] [n]` | VRRP master hijack |
+| `dhcpv6 rogue <prefix> <dns> [s]` | Rogue DHCPv6 server (stateful IPv6) |
+| `dns spoof <ip> [secs]` | DNS spoof (answer all queries with `<ip>`) |
+| `dhcp rogue <pool> [mask gw dns secs]` | Rogue DHCP server (hands out leases) |
+| `dot1x startflood [count]` | EAPOL-Start flood (random MACs) |
+| `dot1x logoffmac <mac>` | Spoofed EAPOL-Logoff (deauth a client) |
+| `dot1x mab [secs]` | MAB / 802.1X enforcement probe |
+| `dot1x rogue [secs] [md5]` | Rogue authenticator (harvest EAP credentials) |
 
 ### Wi-Fi / Web (persisted to NVS)
 | Command | Description |
@@ -274,6 +340,96 @@ raw-frame control. It implements:
 
 ---
 
+## 802.1X / EAP Authentication
+
+[src/dot1x.cpp](src/dot1x.cpp) implements a full 802.1X supplicant supporting
+multiple EAP methods:
+
+| Method | Description |
+|--------|-------------|
+| **EAP-MD5** | Simple challenge/response (username + password) |
+| **EAP-TLS** | Certificate-based mutual authentication (RFC 5216); client cert + key uploaded via web UI |
+| **PEAPv0/MSCHAPv2** | TLS tunnel with inner EAP-MSCHAPv2 (RFC 2759); most common enterprise Wi-Fi/wired auth |
+| **EAP-TTLS/PAP** | TLS tunnel with inner PAP (cleartext inside tunnel, RFC 5281) |
+| **EAP-TTLS/MSCHAPv2** | TLS tunnel with inner MS-CHAPv2 via Diameter AVPs |
+
+The TLS engine uses mbedTLS (ESP-IDF); fragmented EAP-TLS exchange is handled
+per RFC 5216. Certificates are stored in LittleFS and managed via the web UI or
+`dot1x cert` CLI commands.
+
+---
+
+## FHRP (HSRP / VRRP)
+
+[src/fhrp.cpp](src/fhrp.cpp) provides First-Hop Redundancy Protocol assessment:
+
+- **Listen (`fhrp listen`)** — passively sniffs and decodes HSRP (UDP/1985) and
+  VRRP (IP protocol 112) advertisements, revealing group IDs, virtual IPs,
+  priorities, and state.
+- **HSRP hijack (`fhrp hsrp`)** — sends HSRP Coup + Hello frames with priority
+  255 using the HSRP virtual MAC (`00:00:0c:07:ac:GG`), taking over the default
+  gateway. Tests HSRP authentication and FHRP hardening.
+- **VRRP hijack (`fhrp vrrp`)** — sends VRRP advertisements with max priority
+  using the VRRP virtual MAC (`00:00:5e:00:01:VR`), taking over the master role.
+
+---
+
+## DHCPv6
+
+[src/dhcpv6.cpp](src/dhcpv6.cpp) implements stateful IPv6 address assignment
+testing per RFC 8415:
+
+- **Probe (`dhcpv6 probe`)** — sends SOLICIT and decodes ADVERTISE/REPLY,
+  revealing the server DUID, offered IPv6 address, and DNS servers.
+- **Rogue server (`dhcpv6 rogue`)** — answers SOLICIT/REQUEST with
+  ADVERTISE/REPLY, handing out addresses from a specified /64 prefix and
+  advertising a controlled DNS server. Tests DHCPv6 guard/snooping.
+
+---
+
+## DNS Tools
+
+[src/dns_tool.cpp](src/dns_tool.cpp) provides DNS assessment capabilities:
+
+- **Resolve (`dns resolve`)** — unicast DNS A-record query to a specified server
+  (or the configured gateway). ARP-resolves the target, sends a standard DNS
+  query, and parses the response.
+- **Spoof (`dns spoof`)** — rogue DNS responder that monitors the wire for DNS
+  queries (UDP/53) and injects forged replies redirecting all queried names to a
+  controlled IP. Tests DNS inspection / DNSSEC enforcement.
+
+---
+
+## SNMP Recon
+
+[src/snmp_recon.cpp](src/snmp_recon.cpp) performs SNMP reconnaissance:
+
+- **Probe (`snmp probe`)** — sends SNMPv1 GET requests for `sysDescr.0`
+  (OID 1.3.6.1.2.1.1.1.0) using common community strings (`public`, `private`,
+  `community`, `admin`, `snmp`, `monitor`). Reports any accepted community and
+  the device description.
+- **Sweep (`snmp sweep`)** — probes an IP range (up to 1024 hosts) with a given
+  community string, identifying all SNMP-responsive devices.
+
+---
+
+## Rogue Authenticator
+
+[src/rogue_auth.cpp](src/rogue_auth.cpp) implements a fake 802.1X authenticator
+for credential harvesting (authorized pentest use):
+
+- Broadcasts EAP-Request/Identity to solicit supplicants (or responds to
+  EAPOL-Start frames)
+- Challenges with EAP-MD5 or EAP-MSCHAPv2 (configurable)
+- Captures and displays:
+  - Outer identity (often the real username)
+  - EAP-MD5 challenge/response pairs
+  - MS-CHAPv2 auth-challenge / peer-challenge / NT-Response
+- Outputs MS-CHAPv2 hashes in **hashcat mode 5500** format for offline cracking
+- Tracks up to 8 concurrent supplicants
+
+---
+
 ## RFC 2544 Suite
 
 [src/rfc2544.cpp](src/rfc2544.cpp) implements the four core benchmarks
@@ -328,8 +484,23 @@ Frame sizes and durations are configured in [include/config.h](include/config.h)
 | [src/rfc2544.cpp](src/rfc2544.cpp) | RFC 2544 benchmark suite |
 | [src/discovery.cpp](src/discovery.cpp) | LLDP/CDP decode + advertisement |
 | [src/ip_stack.cpp](src/ip_stack.cpp) | Minimal ARP/IP/UDP/ICMP over MACRAW |
-| [src/dhcp_test.cpp](src/dhcp_test.cpp) | DHCP DORA + failure scenarios |
+| [src/dhcp_test.cpp](src/dhcp_test.cpp) | DHCP DORA + failure scenarios + rogue server |
+| [src/dhcpv6.cpp](src/dhcpv6.cpp) | DHCPv6 client probe + rogue server (RFC 8415) |
+| [src/dns_tool.cpp](src/dns_tool.cpp) | Unicast DNS resolver + rogue DNS responder |
+| [src/snmp_recon.cpp](src/snmp_recon.cpp) | SNMPv1 community-string probe + sweep |
 | [src/net_probe.cpp](src/net_probe.cpp) | mDNS resolve + ping reachability |
+| [src/dot1x.cpp](src/dot1x.cpp) | 802.1X supplicant (MD5/TLS/PEAP/TTLS) + EAPOL attacks |
+| [src/rogue_auth.cpp](src/rogue_auth.cpp) | Rogue 802.1X authenticator / EAP credential harvester |
+| [src/mschapv2.cpp](src/mschapv2.cpp) | MS-CHAPv2 crypto (self-contained MD4 + DES) |
+| [src/cert_store.cpp](src/cert_store.cpp) | LittleFS certificate storage for EAP-TLS |
+| [src/l2_attack.cpp](src/l2_attack.cpp) | L2 attack suite (VLAN/DTP/STP/MAC-flood/LLDP-CDP flood) |
+| [src/arp_tool.cpp](src/arp_tool.cpp) | ARP scan, gratuitous, spoof, storm |
+| [src/fhrp.cpp](src/fhrp.cpp) | FHRP assessment (HSRP/VRRP listen + hijack) |
+| [src/ipv6_tool.cpp](src/ipv6_tool.cpp) | IPv6 NDP listen + rogue RA |
+| [src/portscan.cpp](src/portscan.cpp) | TCP SYN scan + banner grab |
+| [src/recon.cpp](src/recon.cpp) | Passive recon, ping sweep, traceroute |
+| [src/linkdiag.cpp](src/linkdiag.cpp) | Link diagnostics + flap monitor |
+| [src/pcap.cpp](src/pcap.cpp) | PCAP capture to LittleFS |
 | [src/net_config.cpp](src/net_config.cpp) | NVS persistence (Preferences) |
 | [src/wifi_web.cpp](src/wifi_web.cpp) | Wi-Fi STA/AP + ESPAsyncWebServer UI |
 | [src/cli.cpp](src/cli.cpp) | Serial command parser and dispatch |

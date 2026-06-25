@@ -6,7 +6,7 @@ static constexpr uint16_t BUF_SIZE_KB   = 16;
 static constexpr uint32_t BUF_SIZE      = BUF_SIZE_KB * 1024UL;   // 16384 bytes
 static constexpr uint16_t BUF_MASK      = BUF_SIZE - 1;           // 0x3FFF
 
-static SPIClass _spi(VSPI);
+static SPIClass _spi(FSPI);
 static SPISettings _spiSettings(W5500_SPI_FREQ, MSBFIRST, SPI_MODE0);
 
 // =============================================================================
@@ -32,7 +32,7 @@ bool W5500Raw::begin(const uint8_t mac[6])
         digitalWrite(_rstPin, HIGH);
     }
 
-    // Start VSPI with explicit pin mapping
+    // Start FSPI with explicit pin mapping
     _spi.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, _csPin);
 
     // Hardware reset

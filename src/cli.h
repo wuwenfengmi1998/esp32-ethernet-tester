@@ -94,6 +94,20 @@ private:
     void _cmdIp(char *args);
     void _cmdDhcp(char *args);
     void _cmdProbe(char *args);
+    void _cmdDot1x(char *args);
+    void _cmdArm(char *args);
+    void _cmdL2(char *args);
+    void _cmdArp(char *args);
+    void _cmdScan(char *args);
+    void _cmdRecon(char *args);
+    void _cmdIpv6(char *args);
+    void _cmdPcap(char *args);
+    void _cmdFhrp(char *args);
+    void _cmdDhcpv6(char *args);
+    void _cmdDns(char *args);
+    void _cmdSnmp(char *args);
+    bool _requireArmed();
+    void _cmdReboot();
 
     static uint16_t _parseFrameSize(const char *arg, uint16_t defaultSize = 64);
     static uint32_t _parseCount(const char *arg, uint32_t defaultVal = INJECT_DEFAULT_COUNT);

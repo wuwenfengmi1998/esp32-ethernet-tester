@@ -9,6 +9,7 @@
 #include "net_config.h"
 #include "net_probe.h"
 #include "wifi_web.h"
+#include "cert_store.h"
 #include "cli.h"
 
 // =============================================================================
@@ -27,7 +28,8 @@ static DhcpTest    dhcp(ipStack, srcMac);
 static CLI         serialCli(eth, inj, rfc, ipStack, dhcp, netCfg, srcMac, dstMac);
 static WebControl  web;
 
-// GPIO 2 is the commonly used status LED on ESP-WROOM32 dev boards
+// The Waveshare ESP32-S3-POE-ETH has no plain status LED (the onboard LED is a
+// WS2812 RGB on GPIO21). GPIO2 is left free here as a generic status output.
 #ifndef LED_BUILTIN
 #define LED_BUILTIN 2
 #endif
@@ -41,6 +43,9 @@ void setup()
     while (!Serial && millis() < 3000) {}
 
     netConfigLoad(netCfg);
+
+    // Mount the certificate store (LittleFS) used by the EAP-TLS supplicant.
+    certStoreBegin();
 
     Serial.println("\r\nInitialising W5500...");
 
@@ -77,11 +82,16 @@ void setup()
     web.setStatusProvider([]() { return serialCli.statusJson(); });
     web.setCommandHandler([](const String &c) { serialCli.runCommand(c); });
     web.setConfigHandler([](const String &ssid, const String &pass,
-                            const String &host, bool wifiEn) {
+                            const String &host, bool wifiEn,
+                            bool apMode, const String &apSsid,
+                            const String &apPass) {
         if (ssid.length()) strncpy(netCfg.wifiSsid, ssid.c_str(), sizeof(netCfg.wifiSsid) - 1);
         if (pass.length()) strncpy(netCfg.wifiPass, pass.c_str(), sizeof(netCfg.wifiPass) - 1);
         if (host.length()) strncpy(netCfg.hostname, host.c_str(), sizeof(netCfg.hostname) - 1);
+        if (apSsid.length()) strncpy(netCfg.apSsid, apSsid.c_str(), sizeof(netCfg.apSsid) - 1);
+        if (apPass.length()) strncpy(netCfg.apPass, apPass.c_str(), sizeof(netCfg.apPass) - 1);
         netCfg.wifiEnabled = wifiEn;
+        netCfg.apMode      = apMode;
         netConfigSave(netCfg);
     });
     web.begin(netCfg);

@@ -2,8 +2,25 @@
 #include "../include/config.h"
 #include "discovery.h"
 #include "net_probe.h"
+#include "dot1x.h"
+#include "cert_store.h"
+#include "l2_attack.h"
+#include "arp_tool.h"
+#include "portscan.h"
+#include "recon.h"
+#include "linkdiag.h"
+#include "ipv6_tool.h"
+#include "pcap.h"
+#include "fhrp.h"
+#include "dhcpv6.h"
+#include "dns_tool.h"
+#include "snmp_recon.h"
+#include "rogue_auth.h"
+#include "net_util.h"
 #include "weblog.h"
+#include <WiFi.h>
 #include <esp_timer.h>
+#include <lwip/sockets.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -127,6 +144,29 @@ void CLI::_dispatch(char *line)
     else if (strcasecmp(verb, "ip")       == 0) _cmdIp(args);
     else if (strcasecmp(verb, "dhcp")     == 0) _cmdDhcp(args);
     else if (strcasecmp(verb, "probe")    == 0) _cmdProbe(args);
+    else if (strcasecmp(verb, "dot1x")    == 0) _cmdDot1x(args);
+    else if (strcasecmp(verb, "arm")      == 0) _cmdArm(args);
+    else if (strcasecmp(verb, "disarm")   == 0) { _cfg.authorizedMode = false; netConfigSave(_cfg); Serial.println("Authorized (lab) mode DISABLED. Offensive tests blocked."); }
+    else if (strcasecmp(verb, "l2")       == 0) _cmdL2(args);
+    else if (strcasecmp(verb, "arp")      == 0) _cmdArp(args);
+    else if (strcasecmp(verb, "scan")     == 0) _cmdScan(args);
+    else if (strcasecmp(verb, "recon")    == 0) _cmdRecon(args);
+    else if (strcasecmp(verb, "ipv6")     == 0) _cmdIpv6(args);
+    else if (strcasecmp(verb, "fhrp")     == 0) _cmdFhrp(args);
+    else if (strcasecmp(verb, "dhcpv6")   == 0) _cmdDhcpv6(args);
+    else if (strcasecmp(verb, "dns")      == 0) _cmdDns(args);
+    else if (strcasecmp(verb, "snmp")     == 0) _cmdSnmp(args);
+    else if (strcasecmp(verb, "pcap")     == 0) _cmdPcap(args);
+    else if (strcasecmp(verb, "link")     == 0) {
+        char *op = args ? strtok(args, " \t") : nullptr;
+        char *a1 = strtok(nullptr, " \t");
+        if (op && strcasecmp(op, "monitor") == 0)
+            linkMonitor(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 30);
+        else
+            linkInfo(_eth);
+    }
+    else if (strcasecmp(verb, "reboot")   == 0) _cmdReboot();
+    else if (strcasecmp(verb, "reset")    == 0) _cmdReboot();
     else {
         Serial.printf("Unknown command: '%s'  (type 'help')\r\n", verb);
     }
@@ -198,12 +238,75 @@ void CLI::_cmdHelp()
         "  dhcp renew [secs]                Short lease + unicast renew\r\n"
         "  probe <hostname>                 Resolve <name>.local (mDNS) and ping\r\n"
         "\r\n"
+        "802.1X / AAA Port Authentication (EAPOL supplicant):\r\n"
+        "  dot1x                            Show 802.1X method / credential status\r\n"
+        "  dot1x method md5|tls|peap|ttls-pap|ttls-mschap  Select EAP method\r\n"
+        "  dot1x probe                      Detect whether the port enforces 802.1X\r\n"
+        "  dot1x auth [user] [pass]         Authenticate with the selected method\r\n"
+        "  dot1x user <name>                Set 802.1X identity (saved)\r\n"
+        "  dot1x pass <password>            Set EAP-MD5 password (saved)\r\n"
+        "  dot1x keypass <pw>               Set EAP-TLS private-key passphrase (saved)\r\n"
+        "  dot1x cert [clear ...]           Show / remove uploaded certificates\r\n"
+        "  dot1x logoff                     Send EAPOL-Logoff\r\n"
+        "  (EAP-TLS certificates are uploaded from the web UI)\r\n"
+        "\r\n"
         "Wi-Fi / Web (config stored in NVS):\r\n"
         "  wifi                             Show Wi-Fi status\r\n"
-        "  wifi ssid <ssid>                 Set SSID (saved)\r\n"
-        "  wifi pass <password>             Set password (saved)\r\n"
+        "  wifi ssid <ssid>                 Set infrastructure SSID (saved)\r\n"
+        "  wifi pass <password>             Set infrastructure password (saved)\r\n"
+        "  wifi mode ap|sta                 Mgmt as soft AP (field) or station (saved)\r\n"
+        "  wifi apssid <ssid>               Set soft-AP SSID (saved)\r\n"
+        "  wifi appass <password>           Set soft-AP password (>=8 chars, blank=open)\r\n"
         "  wifi on|off                      Enable/disable Wi-Fi on boot (saved)\r\n"
         "  host <hostname>                  Set device hostname (saved)\r\n"
+        "\r\n"
+        "Reconnaissance:\r\n"
+        "  recon passive [secs]             Passively map hosts/protocols (default 30 s)\r\n"
+        "  recon sweep <start> <end>        ICMP ping sweep of an address range\r\n"
+        "  recon trace <ip> [maxhops]       ICMP traceroute to a target\r\n"
+        "  arp scan <start> <end>           ARP sweep for live hosts (L2 discovery)\r\n"
+        "  scan common <ip>                 TCP SYN scan of common ports\r\n"
+        "  scan ports <ip> <first> <last>   TCP SYN scan of a port range\r\n"
+        "  scan banner <ip> <port> [probe]  Banner grab via full TCP handshake\r\n"
+        "  link [monitor [secs]]            Link speed/duplex info or flap monitor\r\n"
+        "  wifi scan                        Scan Wi-Fi (rogue-AP / evil-twin recon)\r\n"
+        "  ipv6 listen [secs]               Decode IPv6 NDP (RS/RA/NS/NA)\r\n"
+        "  fhrp listen [secs]               Decode HSRP/VRRP advertisements\r\n"
+        "  dhcpv6 probe [secs]              Discover DHCPv6 servers (SOLICIT)\r\n"
+        "  dns resolve <host> [server]      Unicast DNS A-record query\r\n"
+        "  snmp probe <ip>                  SNMP community-string probe (sysDescr)\r\n"
+        "  snmp sweep <start> <end> [comm]  SNMP sweep of an IP range\r\n"
+        "  pcap start [secs] [maxframes]    Capture frames to /capture.pcap (web download)\r\n"
+        "  pcap status | delete             Show or remove the stored capture\r\n"
+        "\r\n"
+        "Offensive / DoS tests (require 'arm' -- authorized lab use only):\r\n"
+        "  arm [on]                         Show or enable authorized (lab) mode\r\n"
+        "  disarm                           Disable authorized mode\r\n"
+        "  l2 vlan <vid> [pcp] [count]      802.1Q single-tag VLAN inject\r\n"
+        "  l2 dtag <native> <target> [n]    Double-tag (Q-in-Q) VLAN hop\r\n"
+        "  l2 dtp                           DTP trunk-negotiation spoof\r\n"
+        "  l2 macflood [count] [rate]       CAM-table flood (random MACs)\r\n"
+        "  l2 stp listen [secs]             Decode STP/RSTP BPDUs\r\n"
+        "  l2 stp root [prio] [secs]        Claim root bridge (BPDU/Root Guard test)\r\n"
+        "  l2 stp tcn [count]               Inject topology-change BPDUs\r\n"
+        "  l2 lldpflood [count]             LLDP neighbour-table flood\r\n"
+        "  l2 cdpflood [count]              CDP neighbour-table flood\r\n"
+        "  arp gratuitous <ip> [count]      Gratuitous ARP announce\r\n"
+        "  arp spoof <victim> <gw> [secs]   ARP MITM (auto-restores on stop)\r\n"
+        "  arp storm [count] [rate]         ARP request flood\r\n"
+        "  ipv6 rogue [lifetime] [count]    Rogue Router Advertisement (SLAAC takeover)\r\n"
+        "  fhrp hsrp <grp> <vip> [prio] [n] HSRP gateway hijack\r\n"
+        "  fhrp vrrp <vrid> <vip> [prio] [n] VRRP master hijack\r\n"
+        "  dhcpv6 rogue <prefix> <dns> [s]  Rogue DHCPv6 server (stateful IPv6)\r\n"
+        "  dns spoof <ip> [secs]            DNS spoof (answer all queries with <ip>)\r\n"
+        "  dhcp rogue <pool> [mask gw dns secs]  Rogue DHCP server (hands out leases)\r\n"
+        "  dot1x startflood [count]         EAPOL-Start flood (random MACs)\r\n"
+        "  dot1x logoffmac <mac>            Spoofed EAPOL-Logoff (deauth a client)\r\n"
+        "  dot1x mab [secs]                 MAB / 802.1X enforcement probe\r\n"
+        "  dot1x rogue [secs] [md5]         Rogue authenticator (harvest credentials)\r\n"
+        "\r\n"
+        "System:\r\n"
+        "  reboot | reset                   Restart the device\r\n"
         "\r\n"
         "NOTE: The W5500 auto-calculates FCS. True CRC error injection\r\n"
         "      is not possible through this interface.\r\n"
@@ -689,6 +792,22 @@ void CLI::_cmdDhcp(char *args)
         uint32_t secs = rest ? (uint32_t)atol(rest) : 60;
         if (secs == 0) secs = 60;
         _dhcp.renewTest(secs);
+    } else if (strcasecmp(sub, "rogue") == 0) {
+        if (!_requireArmed()) return;
+        char *t2 = strtok(nullptr, " \t");
+        char *t3 = strtok(nullptr, " \t");
+        char *t4 = strtok(nullptr, " \t");
+        char *t5 = strtok(nullptr, " \t");
+        uint32_t pool = 0, mask = 0xFFFFFF00UL, gw = 0, dns = 0, secs = 120;
+        if (!rest || !parseIp(rest, &pool)) {
+            Serial.println("Usage: dhcp rogue <pool-start-ip> [mask] [gw] [dns] [secs]");
+            return;
+        }
+        if (t2) parseIp(t2, &mask);
+        if (t3) parseIp(t3, &gw);
+        if (t4) parseIp(t4, &dns);
+        if (t5) secs = (uint32_t)atol(t5);
+        _dhcp.rogueServer(pool, mask, gw, dns, secs);
     } else {
         Serial.printf("Unknown dhcp subcommand: '%s'\r\n", sub);
     }
@@ -718,10 +837,33 @@ void CLI::_cmdWifi(char *args)
 
     if (!sub) {
         Serial.printf("\r\nWi-Fi enabled : %s\r\n", _cfg.wifiEnabled ? "yes" : "no");
+        Serial.printf("Mgmt mode     : %s\r\n", _cfg.apMode ? "access point (field)" : "infrastructure (station)");
         Serial.printf("SSID          : %s\r\n", _cfg.wifiSsid[0] ? _cfg.wifiSsid : "(unset)");
         Serial.printf("Password      : %s\r\n", _cfg.wifiPass[0] ? "(set)" : "(unset)");
+        Serial.printf("AP SSID       : %s\r\n", _cfg.apSsid[0] ? _cfg.apSsid : "(hostname)");
+        Serial.printf("AP password   : %s\r\n",
+                      (strlen(_cfg.apPass) >= 8) ? "(WPA2 set)" : "(open)");
         Serial.printf("Hostname      : %s\r\n", _cfg.hostname);
-        Serial.println("(reboot to apply changes)");
+
+        // Live management interface status
+        wifi_mode_t mode = WiFi.getMode();
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("State         : station connected\r\n");
+            Serial.printf("Mgmt IP       : %s\r\n", WiFi.localIP().toString().c_str());
+            Serial.printf("Netmask       : %s\r\n", WiFi.subnetMask().toString().c_str());
+            Serial.printf("Gateway       : %s\r\n", WiFi.gatewayIP().toString().c_str());
+            Serial.printf("RSSI          : %d dBm\r\n", WiFi.RSSI());
+            Serial.printf("URL           : http://%s/  (or http://%s.local/)\r\n",
+                          WiFi.localIP().toString().c_str(), _cfg.hostname);
+        } else if (mode == WIFI_AP || mode == WIFI_AP_STA) {
+            Serial.printf("State         : access point (%d client(s))\r\n", WiFi.softAPgetStationNum());
+            Serial.printf("AP SSID (live): %s\r\n", WiFi.softAPSSID().c_str());
+            Serial.printf("Mgmt IP       : %s\r\n", WiFi.softAPIP().toString().c_str());
+            Serial.printf("URL           : http://%s/\r\n", WiFi.softAPIP().toString().c_str());
+        } else {
+            Serial.printf("State         : not connected\r\n");
+        }
+        Serial.println("(reboot to apply saved changes)");
         return;
     }
 
@@ -741,8 +883,63 @@ void CLI::_cmdWifi(char *args)
     } else if (strcasecmp(sub, "off") == 0) {
         _cfg.wifiEnabled = false; netConfigSave(_cfg);
         Serial.println("Wi-Fi disabled on boot (reboot to apply).");
+    } else if (strcasecmp(sub, "mode") == 0 && val) {
+        if (strcasecmp(val, "ap") == 0) {
+            _cfg.apMode = true; netConfigSave(_cfg);
+            Serial.println("Mgmt mode: access point (field use). Reboot to apply.");
+        } else if (strcasecmp(val, "sta") == 0 || strcasecmp(val, "station") == 0) {
+            _cfg.apMode = false; netConfigSave(_cfg);
+            Serial.println("Mgmt mode: infrastructure (station). Reboot to apply.");
+        } else {
+            Serial.println("Usage: wifi mode ap|sta");
+        }
+    } else if (strcasecmp(sub, "apssid") == 0 && val) {
+        strncpy(_cfg.apSsid, val, sizeof(_cfg.apSsid) - 1);
+        _cfg.apSsid[sizeof(_cfg.apSsid) - 1] = '\0';
+        netConfigSave(_cfg);
+        Serial.printf("AP SSID saved: '%s'.\r\n", _cfg.apSsid);
+    } else if (strcasecmp(sub, "appass") == 0) {
+        if (val && strlen(val) > 0 && strlen(val) < 8) {
+            Serial.println("AP password must be >= 8 chars (WPA2) or empty for an open network.");
+        } else {
+            if (val) { strncpy(_cfg.apPass, val, sizeof(_cfg.apPass) - 1); _cfg.apPass[sizeof(_cfg.apPass) - 1] = '\0'; }
+            else     { _cfg.apPass[0] = '\0'; }
+            netConfigSave(_cfg);
+            Serial.printf("AP password %s.\r\n", _cfg.apPass[0] ? "saved (WPA2)" : "cleared (open network)");
+        }
+    } else if (strcasecmp(sub, "scan") == 0) {
+        Serial.println("\r\nScanning for Wi-Fi networks (rogue-AP / evil-twin recon)...");
+        int n = WiFi.scanNetworks();
+        if (n <= 0) { Serial.println("No networks found (or scan unavailable in current mode)."); return; }
+        Serial.printf("%d network(s):\r\n", n);
+        Serial.println("  SSID                              CH  RSSI  ENC  BSSID");
+        for (int i = 0; i < n; i++) {
+            const char *enc;
+            switch (WiFi.encryptionType(i)) {
+                case WIFI_AUTH_OPEN:        enc = "OPEN"; break;
+                case WIFI_AUTH_WEP:         enc = "WEP "; break;
+                case WIFI_AUTH_WPA_PSK:     enc = "WPA "; break;
+                case WIFI_AUTH_WPA2_PSK:    enc = "WPA2"; break;
+                case WIFI_AUTH_WPA_WPA2_PSK:enc = "W12 "; break;
+                case WIFI_AUTH_WPA3_PSK:    enc = "WPA3"; break;
+                default:                    enc = "?   "; break;
+            }
+            Serial.printf("  %-32s  %2d  %4d  %s %s\r\n",
+                          WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i),
+                          enc, WiFi.BSSIDstr(i).c_str());
+        }
+        // Flag duplicate-SSID / different-BSSID (possible evil twin) against our config.
+        if (_cfg.wifiSsid[0]) {
+            int seen = 0;
+            for (int i = 0; i < n; i++) if (WiFi.SSID(i) == _cfg.wifiSsid) seen++;
+            if (seen > 1)
+                Serial.printf("WARNING: %d APs advertise your SSID '%s' -- possible evil twin.\r\n",
+                              seen, _cfg.wifiSsid);
+        }
+        WiFi.scanDelete();
     } else {
-        Serial.println("Usage: wifi [ssid <s> | pass <p> | on | off]");
+        Serial.println("Usage: wifi [ssid <s> | pass <p> | on | off | scan |");
+        Serial.println("            mode ap|sta | apssid <s> | appass <p>]");
     }
 }
 
@@ -761,6 +958,656 @@ void CLI::_cmdHost(char *args)
     netConfigSave(_cfg);
     Serial.printf("Hostname saved: '%s' (reboot to apply to mDNS responder).\r\n",
                   _cfg.hostname);
+}
+
+// =============================================================================
+// dot1x — 802.1X (EAPOL) supplicant / AAA port authentication test
+// =============================================================================
+static void _printCertLine(const char *label, CertKind kind)
+{
+    if (certStoreExists(kind))
+        Serial.printf("%s: present (%u bytes)\r\n", label, (unsigned)certStoreSize(kind));
+    else
+        Serial.printf("%s: (none)\r\n", label);
+}
+
+void CLI::_cmdDot1x(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    char *val = strtok(nullptr, "");
+    if (val) while (*val == ' ') val++;
+
+    if (!sub || strcasecmp(sub, "status") == 0) {
+        const char *mname = _cfg.dot1xMethod == 1 ? "EAP-TLS (certificate)"
+                          : _cfg.dot1xMethod == 2 ? "PEAPv0/EAP-MSCHAPv2 (password)"
+                          : _cfg.dot1xMethod == 3 ? "EAP-TTLS/PAP (password)"
+                          : _cfg.dot1xMethod == 4 ? "EAP-TTLS/MSCHAPv2 (password)"
+                          :                         "EAP-MD5 (password)";
+        Serial.printf("\r\nEAP method      : %s\r\n", mname);
+        Serial.printf("802.1X identity : %s\r\n",
+                      _cfg.dot1xUser[0] ? _cfg.dot1xUser : "(unset)");
+        Serial.printf("802.1X password : %s\r\n",
+                      _cfg.dot1xPass[0] ? "(set)" : "(unset)");
+        Serial.printf("Key passphrase  : %s\r\n",
+                      _cfg.dot1xKeyPass[0] ? "(set)" : "(none)");
+        _printCertLine("CA certificate  ", CertKind::CA);
+        _printCertLine("Client cert     ", CertKind::CLIENT);
+        _printCertLine("Client key      ", CertKind::KEY);
+        Serial.println("Subcommands: method md5|tls|peap|ttls-pap|ttls-mschap | probe |");
+        Serial.println("             auth [user] [pass] | user <name> | pass <pw> |");
+        Serial.println("             keypass <pw> | cert [clear ca|client|key|all] | logoff");
+        return;
+    }
+
+    if (strcasecmp(sub, "method") == 0) {
+        if (val && strcasecmp(val, "tls") == 0) {
+            _cfg.dot1xMethod = 1; netConfigSave(_cfg);
+            Serial.println("EAP method set to EAP-TLS (certificate based).");
+        } else if (val && strcasecmp(val, "peap") == 0) {
+            _cfg.dot1xMethod = 2; netConfigSave(_cfg);
+            Serial.println("EAP method set to PEAPv0/EAP-MSCHAPv2 (password based).");
+        } else if (val && strcasecmp(val, "ttls-pap") == 0) {
+            _cfg.dot1xMethod = 3; netConfigSave(_cfg);
+            Serial.println("EAP method set to EAP-TTLS / PAP (password based).");
+        } else if (val && strcasecmp(val, "ttls-mschap") == 0) {
+            _cfg.dot1xMethod = 4; netConfigSave(_cfg);
+            Serial.println("EAP method set to EAP-TTLS / MS-CHAPv2 (password based).");
+        } else if (val && (strcasecmp(val, "md5") == 0)) {
+            _cfg.dot1xMethod = 0; netConfigSave(_cfg);
+            Serial.println("EAP method set to EAP-MD5 (password based).");
+        } else {
+            Serial.println("Usage: dot1x method md5|tls|peap|ttls-pap|ttls-mschap");
+        }
+
+    } else if (strcasecmp(sub, "user") == 0 && val) {
+        strncpy(_cfg.dot1xUser, val, sizeof(_cfg.dot1xUser) - 1);
+        _cfg.dot1xUser[sizeof(_cfg.dot1xUser) - 1] = '\0';
+        netConfigSave(_cfg);
+        Serial.printf("802.1X username saved: '%s'.\r\n", _cfg.dot1xUser);
+
+    } else if (strcasecmp(sub, "pass") == 0 && val) {
+        strncpy(_cfg.dot1xPass, val, sizeof(_cfg.dot1xPass) - 1);
+        _cfg.dot1xPass[sizeof(_cfg.dot1xPass) - 1] = '\0';
+        netConfigSave(_cfg);
+        Serial.println("802.1X password saved.");
+
+    } else if (strcasecmp(sub, "keypass") == 0) {
+        if (val) { strncpy(_cfg.dot1xKeyPass, val, sizeof(_cfg.dot1xKeyPass) - 1);
+                   _cfg.dot1xKeyPass[sizeof(_cfg.dot1xKeyPass) - 1] = '\0'; }
+        else     { _cfg.dot1xKeyPass[0] = '\0'; }
+        netConfigSave(_cfg);
+        Serial.printf("Private-key passphrase %s.\r\n",
+                      _cfg.dot1xKeyPass[0] ? "saved" : "cleared");
+
+    } else if (strcasecmp(sub, "cert") == 0) {
+        char *op   = val ? strtok(val, " \t") : nullptr;
+        char *what = strtok(nullptr, " \t");
+        if (!op) {
+            _printCertLine("CA certificate ", CertKind::CA);
+            _printCertLine("Client cert    ", CertKind::CLIENT);
+            _printCertLine("Client key     ", CertKind::KEY);
+            Serial.println("Upload certificates from the web UI. 'dot1x cert clear ca|client|key|all'.");
+        } else if (strcasecmp(op, "clear") == 0 && what) {
+            if (strcasecmp(what, "ca") == 0)       { certStoreDelete(CertKind::CA);     Serial.println("CA certificate removed."); }
+            else if (strcasecmp(what, "client") == 0) { certStoreDelete(CertKind::CLIENT); Serial.println("Client certificate removed."); }
+            else if (strcasecmp(what, "key") == 0) { certStoreDelete(CertKind::KEY);    Serial.println("Client key removed."); }
+            else if (strcasecmp(what, "all") == 0) {
+                certStoreDelete(CertKind::CA); certStoreDelete(CertKind::CLIENT); certStoreDelete(CertKind::KEY);
+                Serial.println("All certificates removed.");
+            } else Serial.println("Usage: dot1x cert clear ca|client|key|all");
+        } else {
+            Serial.println("Usage: dot1x cert [clear ca|client|key|all]");
+        }
+
+    } else if (strcasecmp(sub, "probe") == 0) {
+        Dot1xTest d1x(_eth, _src);
+        d1x.probe();
+
+    } else if (strcasecmp(sub, "auth") == 0) {
+        if (_cfg.dot1xMethod == 1) {
+            // EAP-TLS: load the uploaded certificate material.
+            String ca, cert, key;
+            bool haveCa = certStoreRead(CertKind::CA, ca);
+            if (!certStoreRead(CertKind::CLIENT, cert) || !certStoreRead(CertKind::KEY, key)) {
+                Serial.println("EAP-TLS: upload a client certificate and key first (see web UI).");
+                return;
+            }
+            Dot1xTest d1x(_eth, _src);
+            d1x.authenticateTls(_cfg.dot1xUser,
+                                haveCa ? ca.c_str() : nullptr,
+                                cert.c_str(), key.c_str(),
+                                _cfg.dot1xKeyPass[0] ? _cfg.dot1xKeyPass : nullptr);
+        } else if (_cfg.dot1xMethod == 2) {
+            // PEAPv0 / EAP-MSCHAPv2: username + password, optional CA cert.
+            const char *user = _cfg.dot1xUser;
+            const char *pass = _cfg.dot1xPass;
+            char u[33] = {0}, p[65] = {0};
+            if (val && *val) {                   // optional inline "user pass"
+                char *a1 = strtok(val, " \t");
+                char *a2 = strtok(nullptr, " \t");
+                if (a1) { strncpy(u, a1, sizeof(u) - 1); user = u; }
+                if (a2) { strncpy(p, a2, sizeof(p) - 1); pass = p; }
+            }
+            if (!user[0] || !pass[0]) {
+                Serial.println("PEAP: set 'dot1x user' and 'dot1x pass' (or pass them inline).");
+                return;
+            }
+            String ca;
+            bool haveCa = certStoreRead(CertKind::CA, ca);
+            Dot1xTest d1x(_eth, _src);
+            d1x.authenticatePeap("anonymous", user, pass,
+                                 haveCa ? ca.c_str() : nullptr);
+        } else if (_cfg.dot1xMethod == 3 || _cfg.dot1xMethod == 4) {
+            // EAP-TTLS: inner PAP (3) or MS-CHAPv2 (4).
+            const char *user = _cfg.dot1xUser;
+            const char *pass = _cfg.dot1xPass;
+            char u[33] = {0}, p[65] = {0};
+            if (val && *val) {                   // optional inline "user pass"
+                char *a1 = strtok(val, " \t");
+                char *a2 = strtok(nullptr, " \t");
+                if (a1) { strncpy(u, a1, sizeof(u) - 1); user = u; }
+                if (a2) { strncpy(p, a2, sizeof(p) - 1); pass = p; }
+            }
+            if (!user[0] || !pass[0]) {
+                Serial.println("EAP-TTLS: set 'dot1x user' and 'dot1x pass' (or pass them inline).");
+                return;
+            }
+            String ca;
+            bool haveCa = certStoreRead(CertKind::CA, ca);
+            Dot1xTest d1x(_eth, _src);
+            d1x.authenticateTtls("anonymous", user, pass,
+                                 haveCa ? ca.c_str() : nullptr,
+                                 _cfg.dot1xMethod == 4);
+        } else {
+            const char *user = _cfg.dot1xUser;
+            const char *pass = _cfg.dot1xPass;
+            char u[33] = {0}, p[65] = {0};
+            if (val && *val) {                   // optional inline "user pass"
+                char *a1 = strtok(val, " \t");
+                char *a2 = strtok(nullptr, " \t");
+                if (a1) { strncpy(u, a1, sizeof(u) - 1); user = u; }
+                if (a2) { strncpy(p, a2, sizeof(p) - 1); pass = p; }
+            }
+            Dot1xTest d1x(_eth, _src);
+            d1x.authenticate(user, pass);
+        }
+
+    } else if (strcasecmp(sub, "logoff") == 0) {
+        Dot1xTest d1x(_eth, _src);
+        d1x.logoff();
+
+    } else if (strcasecmp(sub, "startflood") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = val ? strtok(val, " \t") : nullptr;
+        uint32_t cnt = a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 1000;
+        Dot1xTest d1x(_eth, _src);
+        d1x.startFlood(cnt, true);
+
+    } else if (strcasecmp(sub, "logoffmac") == 0) {
+        if (!_requireArmed()) return;
+        uint8_t vm[6];
+        if (!val || !strToMac(val, vm)) { Serial.println("Usage: dot1x logoffmac <XX:XX:XX:XX:XX:XX>"); return; }
+        Dot1xTest d1x(_eth, _src);
+        d1x.logoffSpoof(vm);
+
+    } else if (strcasecmp(sub, "mab") == 0) {
+        char *a1 = val ? strtok(val, " \t") : nullptr;
+        Dot1xTest d1x(_eth, _src);
+        d1x.mabProbe(a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 15);
+
+    } else if (strcasecmp(sub, "rogue") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = val ? strtok(val, " \t") : nullptr;
+        char *a2 = a1 ? strtok(nullptr, " \t") : nullptr;
+        uint32_t secs = a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 60;
+        bool mschap = true;
+        if (a2 && strcasecmp(a2, "md5") == 0) mschap = false;
+        rogueAuthStart(_eth, _src, mschap, secs);
+
+    } else {
+        Serial.println("Usage: dot1x [method md5|tls|peap|ttls-pap|ttls-mschap | probe |");
+        Serial.println("             auth [user] [pass] | user <name> | pass <pw> |");
+        Serial.println("             keypass <pw> | cert [clear ca|client|key|all] | logoff |");
+        Serial.println("             rogue [secs] [md5]]");
+    }
+}
+
+// =============================================================================
+// Authorized (lab) mode gate for offensive / DoS tests
+// =============================================================================
+void CLI::_cmdArm(char *args)
+{
+    if (args && (strcasecmp(args, "on") == 0 || strcasecmp(args, "yes") == 0)) {
+        _cfg.authorizedMode = true; netConfigSave(_cfg);
+        Serial.println("Authorized (lab) mode ENABLED.");
+        Serial.println("Offensive tests (l2/arp/scan storms, spoofing, floods) are now permitted.");
+        Serial.println("Use only on networks you are explicitly authorized to test. 'disarm' to revoke.");
+        return;
+    }
+    Serial.printf("\r\nAuthorized (lab) mode: %s\r\n", _cfg.authorizedMode ? "ENABLED" : "disabled");
+    Serial.println("Type 'arm on' to enable disruptive/offensive tests (authorized use only).");
+}
+
+bool CLI::_requireArmed()
+{
+    if (_cfg.authorizedMode) return true;
+    Serial.println("Refused: this is a disruptive/offensive test.");
+    Serial.println("Enable authorized lab mode first with 'arm on' (authorized networks only).");
+    return false;
+}
+
+// =============================================================================
+// l2 -- Layer-2 switch assessment / attacks
+// =============================================================================
+void CLI::_cmdL2(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) {
+        Serial.println("Usage: l2 vlan|dtag|dtp|macflood|stp|lldpflood|cdpflood ...");
+        return;
+    }
+
+    if (strcasecmp(sub, "vlan") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        char *a3 = strtok(nullptr, " \t");
+        uint16_t vid = a1 ? (uint16_t)atoi(a1) : 0;
+        uint8_t pcp  = a2 ? (uint8_t)atoi(a2) : 0;
+        uint32_t cnt = a3 ? (uint32_t)strtoul(a3, nullptr, 10) : 5;
+        if (!vid) { Serial.println("Usage: l2 vlan <vid> [pcp] [count]"); return; }
+        l2VlanSingle(_eth, _src, vid, pcp, cnt);
+
+    } else if (strcasecmp(sub, "dtag") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        char *a3 = strtok(nullptr, " \t");
+        if (!a1 || !a2) { Serial.println("Usage: l2 dtag <native> <target> [count]"); return; }
+        uint32_t cnt = a3 ? (uint32_t)strtoul(a3, nullptr, 10) : 5;
+        l2VlanDouble(_eth, _src, (uint16_t)atoi(a1), (uint16_t)atoi(a2), cnt);
+
+    } else if (strcasecmp(sub, "dtp") == 0) {
+        if (!_requireArmed()) return;
+        l2DtpTrunk(_eth, _src);
+
+    } else if (strcasecmp(sub, "macflood") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint32_t cnt  = a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 10000;
+        uint32_t rate = a2 ? (uint32_t)strtoul(a2, nullptr, 10) : 0;
+        l2MacFlood(_eth, cnt, rate);
+
+    } else if (strcasecmp(sub, "stp") == 0) {
+        char *op = strtok(nullptr, " \t");
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        if (op && strcasecmp(op, "listen") == 0) {
+            l2StpListen(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 35);
+        } else if (op && strcasecmp(op, "root") == 0) {
+            if (!_requireArmed()) return;
+            uint16_t prio = a1 ? (uint16_t)atoi(a1) : 0;
+            uint32_t secs = a2 ? (uint32_t)strtoul(a2, nullptr, 10) : 30;
+            l2StpRoot(_eth, _src, prio, secs);
+        } else if (op && strcasecmp(op, "tcn") == 0) {
+            if (!_requireArmed()) return;
+            l2StpTcn(_eth, _src, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 50);
+        } else {
+            Serial.println("Usage: l2 stp listen [secs] | root [prio] [secs] | tcn [count]");
+        }
+
+    } else if (strcasecmp(sub, "lldpflood") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        l2LldpFlood(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 500);
+
+    } else if (strcasecmp(sub, "cdpflood") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        l2CdpFlood(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 500);
+
+    } else {
+        Serial.println("Usage: l2 vlan|dtag|dtp|macflood|stp|lldpflood|cdpflood ...");
+    }
+}
+
+// =============================================================================
+// arp -- ARP assessment toolkit
+// =============================================================================
+void CLI::_cmdArp(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) { Serial.println("Usage: arp scan|gratuitous|spoof|storm ..."); return; }
+
+    if (strcasecmp(sub, "scan") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint32_t s, e;
+        if (!a1 || !a2 || !strToIp(a1, &s) || !strToIp(a2, &e)) {
+            Serial.println("Usage: arp scan <start-ip> <end-ip>"); return;
+        }
+        arpScan(_eth, _src, _ip.ip(), s, e);
+
+    } else if (strcasecmp(sub, "gratuitous") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint32_t ip;
+        if (!a1 || !strToIp(a1, &ip)) { Serial.println("Usage: arp gratuitous <ip> [count]"); return; }
+        arpGratuitous(_eth, _src, ip, a2 ? (uint32_t)strtoul(a2, nullptr, 10) : 5);
+
+    } else if (strcasecmp(sub, "spoof") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        char *a3 = strtok(nullptr, " \t");
+        uint32_t v, g;
+        if (!a1 || !a2 || !strToIp(a1, &v) || !strToIp(a2, &g)) {
+            Serial.println("Usage: arp spoof <victim-ip> <gateway-ip> [secs]"); return;
+        }
+        arpSpoof(_eth, _ip, _src, v, g, a3 ? (uint32_t)strtoul(a3, nullptr, 10) : 60);
+
+    } else if (strcasecmp(sub, "storm") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint32_t cnt  = a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 10000;
+        uint32_t rate = a2 ? (uint32_t)strtoul(a2, nullptr, 10) : 0;
+        arpStorm(_eth, _src, _ip.ip(), cnt, rate);
+
+    } else {
+        Serial.println("Usage: arp scan|gratuitous|spoof|storm ...");
+    }
+}
+
+// =============================================================================
+// scan -- TCP port scanner / banner grabber
+// =============================================================================
+void CLI::_cmdScan(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) { Serial.println("Usage: scan common|ports|banner ..."); return; }
+
+    if (strcasecmp(sub, "common") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        uint32_t t;
+        if (!a1 || !strToIp(a1, &t)) { Serial.println("Usage: scan common <ip>"); return; }
+        tcpScanCommon(_eth, _ip, t);
+
+    } else if (strcasecmp(sub, "ports") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        char *a3 = strtok(nullptr, " \t");
+        uint32_t t;
+        if (!a1 || !a2 || !a3 || !strToIp(a1, &t)) {
+            Serial.println("Usage: scan ports <ip> <first> <last>"); return;
+        }
+        tcpSynScan(_eth, _ip, t, (uint16_t)atoi(a2), (uint16_t)atoi(a3));
+
+    } else if (strcasecmp(sub, "banner") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        char *probe = strtok(nullptr, "");      // remainder = optional probe string
+        uint32_t t;
+        if (!a1 || !a2 || !strToIp(a1, &t)) {
+            Serial.println("Usage: scan banner <ip> <port> [probe-string]"); return;
+        }
+        if (probe) while (*probe == ' ') probe++;
+        tcpBannerGrab(_eth, _ip, t, (uint16_t)atoi(a2), probe);
+
+    } else {
+        Serial.println("Usage: scan common|ports|banner ...");
+    }
+}
+
+// =============================================================================
+// recon -- reconnaissance (passive map / ping sweep / traceroute)
+// =============================================================================
+void CLI::_cmdRecon(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) { Serial.println("Usage: recon passive|sweep|trace ..."); return; }
+
+    if (strcasecmp(sub, "passive") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        reconPassive(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 30);
+
+    } else if (strcasecmp(sub, "sweep") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint32_t s, e;
+        if (!a1 || !a2 || !strToIp(a1, &s) || !strToIp(a2, &e)) {
+            Serial.println("Usage: recon sweep <start-ip> <end-ip>"); return;
+        }
+        reconSweep(_eth, _ip, s, e);
+
+    } else if (strcasecmp(sub, "trace") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint32_t t;
+        if (!a1 || !strToIp(a1, &t)) { Serial.println("Usage: recon trace <ip> [maxhops]"); return; }
+        reconTrace(_eth, _ip, t, a2 ? (uint8_t)atoi(a2) : 20);
+
+    } else {
+        Serial.println("Usage: recon passive|sweep|trace ...");
+    }
+}
+
+// =============================================================================
+// ipv6 -- IPv6 / NDP assessment
+// =============================================================================
+void CLI::_cmdIpv6(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) { Serial.println("Usage: ipv6 listen [secs] | rogue [lifetime] [count]"); return; }
+
+    if (strcasecmp(sub, "listen") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        ipv6Listen(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 30);
+
+    } else if (strcasecmp(sub, "rogue") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint16_t life = a1 ? (uint16_t)atoi(a1) : 1800;
+        uint32_t cnt  = a2 ? (uint32_t)strtoul(a2, nullptr, 10) : 10;
+        ipv6RogueRa(_eth, _src, life, cnt);
+
+    } else {
+        Serial.println("Usage: ipv6 listen [secs] | rogue [lifetime] [count]");
+    }
+}
+
+// =============================================================================
+// pcap -- packet capture to LittleFS
+// =============================================================================
+void CLI::_cmdPcap(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub || strcasecmp(sub, "status") == 0) {
+        uint32_t sz = pcapSize();
+        if (sz) Serial.printf("\r\nStored capture: %s, %lu bytes. Download from the web UI.\r\n",
+                              PCAP_PATH, (unsigned long)sz);
+        else    Serial.println("\r\nNo capture stored. Use 'pcap start [secs] [maxframes]'.");
+        Serial.println("Subcommands: start [secs] [maxframes] | status | delete");
+        return;
+    }
+
+    if (strcasecmp(sub, "start") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint32_t secs = a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 10;
+        uint32_t maxf = a2 ? (uint32_t)strtoul(a2, nullptr, 10) : 0;
+        pcapCapture(_eth, secs, maxf);
+
+    } else if (strcasecmp(sub, "delete") == 0) {
+        pcapDelete();
+        Serial.println("Capture file deleted.");
+
+    } else {
+        Serial.println("Usage: pcap start [secs] [maxframes] | status | delete");
+    }
+}
+
+// =============================================================================
+// fhrp -- HSRP / VRRP listen and hijack
+// =============================================================================
+void CLI::_cmdFhrp(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) { Serial.println("Usage: fhrp listen [secs] | hsrp <group> <vip> [prio] [count] | vrrp <vrid> <vip> [prio] [count]"); return; }
+
+    if (strcasecmp(sub, "listen") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        fhrpListen(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 30);
+
+    } else if (strcasecmp(sub, "hsrp") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t"); // group
+        char *a2 = strtok(nullptr, " \t"); // virtualIp
+        char *a3 = strtok(nullptr, " \t"); // priority
+        char *a4 = strtok(nullptr, " \t"); // count
+        uint32_t vip;
+        if (!a1 || !a2 || !strToIp(a2, &vip)) {
+            Serial.println("Usage: fhrp hsrp <group> <virtual-ip> [priority] [count]"); return;
+        }
+        uint8_t grp = (uint8_t)atoi(a1);
+        uint8_t prio = a3 ? (uint8_t)atoi(a3) : 255;
+        uint32_t cnt = a4 ? (uint32_t)strtoul(a4, nullptr, 10) : 10;
+        hsrpHijack(_eth, _src, _ip.ip(), grp, vip, prio, cnt);
+
+    } else if (strcasecmp(sub, "vrrp") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t"); // vrid
+        char *a2 = strtok(nullptr, " \t"); // virtualIp
+        char *a3 = strtok(nullptr, " \t"); // priority
+        char *a4 = strtok(nullptr, " \t"); // count
+        uint32_t vip;
+        if (!a1 || !a2 || !strToIp(a2, &vip)) {
+            Serial.println("Usage: fhrp vrrp <vrid> <virtual-ip> [priority] [count]"); return;
+        }
+        uint8_t vrid = (uint8_t)atoi(a1);
+        uint8_t prio = a3 ? (uint8_t)atoi(a3) : 255;
+        uint32_t cnt = a4 ? (uint32_t)strtoul(a4, nullptr, 10) : 10;
+        vrrpHijack(_eth, _src, _ip.ip(), vrid, vip, prio, cnt);
+
+    } else {
+        Serial.println("Usage: fhrp listen [secs] | hsrp <group> <vip> [prio] [count] | vrrp <vrid> <vip> [prio] [count]");
+    }
+}
+
+// =============================================================================
+// dhcpv6 -- DHCPv6 probe and rogue server
+// =============================================================================
+void CLI::_cmdDhcpv6(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) { Serial.println("Usage: dhcpv6 probe [secs] | rogue <prefix> <dns> [secs]"); return; }
+
+    if (strcasecmp(sub, "probe") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        dhcpv6Probe(_eth, _src, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 10);
+
+    } else if (strcasecmp(sub, "rogue") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t"); // prefix (e.g. "2001:db8:1::1")
+        char *a2 = strtok(nullptr, " \t"); // dns    (e.g. "2001:db8:1::53")
+        char *a3 = strtok(nullptr, " \t"); // seconds
+        if (!a1 || !a2) {
+            Serial.println("Usage: dhcpv6 rogue <prefix-ipv6> <dns-ipv6> [secs]");
+            Serial.println("  e.g. dhcpv6 rogue 2001:db8:1::1 2001:db8:1::53 60");
+            return;
+        }
+        // Parse IPv6 addresses using lwIP-style or simple colon-hex
+        uint8_t prefix[16], dns[16];
+        memset(prefix, 0, 16); memset(dns, 0, 16);
+        // Simple IPv6 parser: delegate to inet_pton-equivalent
+        struct in6_addr p6, d6;
+        if (!inet_pton(AF_INET6, a1, &p6) || !inet_pton(AF_INET6, a2, &d6)) {
+            Serial.println("Invalid IPv6 address format.");
+            return;
+        }
+        memcpy(prefix, &p6, 16);
+        memcpy(dns, &d6, 16);
+        uint32_t secs = a3 ? (uint32_t)strtoul(a3, nullptr, 10) : 60;
+        dhcpv6Rogue(_eth, _src, prefix, dns, secs);
+
+    } else {
+        Serial.println("Usage: dhcpv6 probe [secs] | rogue <prefix> <dns> [secs]");
+    }
+}
+
+// =============================================================================
+// dns -- unicast DNS resolve and DNS spoof
+// =============================================================================
+void CLI::_cmdDns(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) { Serial.println("Usage: dns resolve <hostname> [server-ip] | spoof <ip> [secs]"); return; }
+
+    if (strcasecmp(sub, "resolve") == 0) {
+        char *a1 = strtok(nullptr, " \t"); // hostname
+        char *a2 = strtok(nullptr, " \t"); // optional DNS server IP
+        if (!a1) { Serial.println("Usage: dns resolve <hostname> [dns-server-ip]"); return; }
+        uint32_t srv = 0;
+        if (a2) strToIp(a2, &srv);
+        dnsResolve(_eth, _ip, a1, srv);
+
+    } else if (strcasecmp(sub, "spoof") == 0) {
+        if (!_requireArmed()) return;
+        char *a1 = strtok(nullptr, " \t"); // spoof IP
+        char *a2 = strtok(nullptr, " \t"); // seconds
+        uint32_t sip;
+        if (!a1 || !strToIp(a1, &sip)) {
+            Serial.println("Usage: dns spoof <spoofed-ip> [secs]"); return;
+        }
+        uint32_t secs = a2 ? (uint32_t)strtoul(a2, nullptr, 10) : 60;
+        dnsSpoof(_eth, _src, sip, secs);
+
+    } else {
+        Serial.println("Usage: dns resolve <hostname> [server-ip] | spoof <ip> [secs]");
+    }
+}
+
+// =============================================================================
+// snmp -- SNMP reconnaissance
+// =============================================================================
+void CLI::_cmdSnmp(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub) { Serial.println("Usage: snmp probe <ip> | sweep <start> <end> [community]"); return; }
+
+    if (strcasecmp(sub, "probe") == 0) {
+        char *a1 = strtok(nullptr, " \t"); // target IP
+        uint32_t t;
+        if (!a1 || !strToIp(a1, &t)) { Serial.println("Usage: snmp probe <ip>"); return; }
+        snmpProbe(_eth, _ip, t);
+
+    } else if (strcasecmp(sub, "sweep") == 0) {
+        char *a1 = strtok(nullptr, " \t"); // start IP
+        char *a2 = strtok(nullptr, " \t"); // end IP
+        char *a3 = strtok(nullptr, " \t"); // optional community
+        uint32_t s, e;
+        if (!a1 || !a2 || !strToIp(a1, &s) || !strToIp(a2, &e)) {
+            Serial.println("Usage: snmp sweep <start-ip> <end-ip> [community]"); return;
+        }
+        snmpSweep(_eth, _ip, s, e, a3 ? a3 : "public");
+
+    } else {
+        Serial.println("Usage: snmp probe <ip> | sweep <start> <end> [community]");
+    }
+}
+
+// =============================================================================
+// reboot / reset
+// =============================================================================
+void CLI::_cmdReboot()
+{
+    Serial.println("Rebooting...");
+    Serial.flush();
+    delay(500);            // allow serial + web capture to flush before reset
+    ESP.restart();
 }
 
 // =============================================================================

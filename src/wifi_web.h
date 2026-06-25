@@ -25,7 +25,10 @@ public:
     using ConfigFn  = std::function<void(const String &ssid,
                                          const String &pass,
                                          const String &host,
-                                         bool wifiEnabled)>;
+                                         bool wifiEnabled,
+                                         bool apMode,
+                                         const String &apSsid,
+                                         const String &apPass)>;
 
     WebControl();
 
@@ -57,6 +60,13 @@ private:
     char      _cfgHost[33] = {0};
     bool      _cfgWifiEn   = false;
     bool      _cfgHasPass  = false;
+    bool      _cfgApMode   = false;
+    char      _cfgApSsid[33] = {0};
+    bool      _cfgApHasPass = false;
+
+    // Live NVS config (for the cert/method status endpoint to read current
+    // EAP method + key-passphrase state, which the CLI may change at runtime).
+    const NetConfig *_cfgLive = nullptr;
 
     void *_server = nullptr;     // AsyncWebServer* (opaque to avoid header leak)
     void  _routes();

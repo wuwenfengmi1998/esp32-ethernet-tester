@@ -13,13 +13,27 @@ struct NetConfig {
     char     wifiSsid[33];      // up to 32 chars + NUL
     char     wifiPass[65];      // up to 64 chars + NUL (WPA2 max)
     char     hostname[33];      // device hostname (<hostname>.local)
-    bool     wifiEnabled;       // attempt STA connection on boot
+    bool     wifiEnabled;       // bring up the Wi-Fi management interface on boot
+
+    // ---- Wi-Fi management mode ----
+    bool     apMode;            // true: host own soft AP (field use); false: join infrastructure (STA)
+    char     apSsid[33];        // soft-AP SSID  (empty -> derived from hostname)
+    char     apPass[65];        // soft-AP passphrase (empty or <8 chars -> open network)
+
+    // ---- 802.1X (EAPOL) supplicant credentials ----
+    char     dot1xUser[33];     // 802.1X identity / username (EAP-MD5 + EAP-TLS)
+    char     dot1xPass[65];     // 802.1X password (EAP-MD5)
+    uint8_t  dot1xMethod;       // EAP method: 0 = EAP-MD5, 1 = EAP-TLS (certs)
+    char     dot1xKeyPass[65];  // private-key passphrase for EAP-TLS (optional)
 
     // ---- IP / L3 test defaults (Ethernet side, applied to the IP stack) ----
     bool     useDhcp;           // true: obtain address via DHCP; false: static
     uint32_t staticIp;          // host-order IPv4 (used when useDhcp == false)
     uint32_t staticMask;
     uint32_t staticGw;
+
+    // ---- Safety ----
+    bool     authorizedMode;    // gates disruptive/offensive tests (must be armed)
 };
 
 // Load configuration from NVS into `cfg`. Missing keys take sensible defaults.

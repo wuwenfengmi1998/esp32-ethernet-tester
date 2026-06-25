@@ -53,6 +53,13 @@ public:
     // to exercise renew/rebind handling.
     void renewTest(uint32_t leaseSecs = 60, uint32_t timeoutMs = 4000);
 
+    // Act as a ROGUE DHCP server for `seconds`: answer DISCOVER with OFFER and
+    // REQUEST with ACK, handing out addresses from `poolStart` upward with the
+    // given mask/gateway/dns. Tests DHCP snooping / rogue-server protection.
+    // (Authorized lab use only.) Returns the number of leases handed out.
+    uint32_t rogueServer(uint32_t poolStart, uint32_t mask, uint32_t gateway,
+                         uint32_t dns, uint32_t seconds);
+
 private:
     IpStack &_ip;
     uint8_t  _mac[6];

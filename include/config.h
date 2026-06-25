@@ -2,14 +2,23 @@
 
 // =============================================================================
 // Hardware Pin Configuration
-// ESP-WROOM32 (VSPI) <-> WIZnet W5500 Lite
+// Waveshare ESP32-S3-POE-ETH (onboard WIZnet W5500 over FSPI)
+// Pin mapping per Waveshare ESP32-S3-ETH wiki.
 // =============================================================================
-#define PIN_W5500_CS      5      // SPI Chip Select  (W5500 /SCS)
-#define PIN_W5500_RST    17      // Hardware reset   (W5500 /RESET, active-low)
-#define PIN_W5500_INT     4      // Interrupt        (W5500 /INT,   not used in polling mode)
-#define PIN_SPI_SCK      18      // VSPI SCK
-#define PIN_SPI_MISO     19      // VSPI MISO
-#define PIN_SPI_MOSI     23      // VSPI MOSI
+// Previous hardware: ESP-WROOM32 (VSPI) <-> WIZnet W5500 Lite
+//   PIN_W5500_CS    5    // SPI Chip Select  (W5500 /SCS)
+//   PIN_W5500_RST  17    // Hardware reset   (W5500 /RESET, active-low)
+//   PIN_W5500_INT   4    // Interrupt        (W5500 /INT, not used in polling mode)
+//   PIN_SPI_SCK    18    // VSPI SCK
+//   PIN_SPI_MISO   19    // VSPI MISO
+//   PIN_SPI_MOSI   23    // VSPI MOSI
+// =============================================================================
+#define PIN_W5500_CS     14      // SPI Chip Select  (W5500 /SCS)
+#define PIN_W5500_RST     9      // Hardware reset   (W5500 /RESET, active-low)
+#define PIN_W5500_INT    10      // Interrupt        (W5500 /INT,   not used in polling mode)
+#define PIN_SPI_SCK      13      // FSPI SCK
+#define PIN_SPI_MISO     12      // FSPI MISO
+#define PIN_SPI_MOSI     11      // FSPI MOSI
 // 8 MHz is reliable over dupont/breadboard wiring. Raise toward 40 MHz only
 // once init succeeds and you are on a clean PCB or short wires.
 #define W5500_SPI_FREQ   8000000UL    // 8 MHz (W5500 max 80 MHz)
