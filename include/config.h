@@ -79,6 +79,15 @@ static const uint16_t RFC2544_SIZES[]   = { 64, 128, 256, 512, 1024, 1280, 1518 
 #define LATENCY_SAMPLES   100
 
 // =============================================================================
+// TF (micro-SD) Card SPI Pins
+// Waveshare ESP32-S3-POE-ETH onboard TF card slot (separate SPI bus from W5500)
+// =============================================================================
+#define PIN_SD_CS       4
+#define PIN_SD_MOSI     6
+#define PIN_SD_MISO     5
+#define PIN_SD_SCK      7
+
+// =============================================================================
 // Error Injection Defaults
 // =============================================================================
 #define INJECT_DEFAULT_COUNT   100     // Frames to send when no count specified

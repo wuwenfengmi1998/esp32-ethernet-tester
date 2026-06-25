@@ -3,9 +3,66 @@
 #include "net_util.h"
 #include "weblog.h"
 #include <LittleFS.h>
+#include <SD.h>
+#include <SPI.h>
 #include <string.h>
 
 #define Serial Out
+
+// =============================================================================
+// SD card state
+// =============================================================================
+static bool _sdReady = false;
+static SPIClass _sdSpi(HSPI);   // Use HSPI for SD (separate from W5500 on FSPI)
+
+bool pcapSdInit()
+{
+    _sdSpi.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
+    if (SD.begin(PIN_SD_CS, _sdSpi, 4000000UL)) {  // 4 MHz initial
+        _sdReady = true;
+        uint64_t totalBytes = SD.totalBytes();
+        uint64_t usedBytes  = SD.usedBytes();
+        Serial.printf("[SD] TF card mounted: %llu MB total, %llu MB used.\r\n",
+                      totalBytes / (1024 * 1024), usedBytes / (1024 * 1024));
+        return true;
+    }
+    _sdReady = false;
+    Serial.println("[SD] No TF card detected. PCAP will use internal flash (LittleFS).");
+    return false;
+}
+
+bool pcapSdAvailable()
+{
+    return _sdReady;
+}
+
+// =============================================================================
+// Internal helpers
+// =============================================================================
+
+// Return the filesystem to use for captures.
+static fs::FS &activeFs()
+{
+    return _sdReady ? (fs::FS &)SD : (fs::FS &)LittleFS;
+}
+
+static const char *activePath()
+{
+    return _sdReady ? PCAP_PATH_SD : PCAP_PATH_FS;
+}
+
+fs::FS *pcapFs()
+{
+    const char *p = activePath();
+    fs::FS &f = activeFs();
+    if (!f.exists(p)) return nullptr;
+    return &f;
+}
+
+const char *pcapPath()
+{
+    return activePath();
+}
 
 // PCAP little-endian writers.
 static inline void le32(uint8_t *p, uint32_t v)
@@ -17,10 +74,20 @@ static inline void le16(uint8_t *p, uint16_t v)
     p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF;
 }
 
+// =============================================================================
+// pcapCapture
+// =============================================================================
 uint32_t pcapCapture(W5500Raw &eth, uint32_t seconds, uint32_t maxFrames)
 {
-    File fp = LittleFS.open(PCAP_PATH, "w");
-    if (!fp) { Serial.println("PCAP: cannot open capture file (LittleFS full?)."); return 0; }
+    const char *path = activePath();
+    fs::FS &fs = activeFs();
+
+    File fp = fs.open(path, "w");
+    if (!fp) {
+        Serial.printf("PCAP: cannot open %s on %s (full?).\r\n", path,
+                      _sdReady ? "SD card" : "LittleFS");
+        return 0;
+    }
 
     // Global header (24 bytes), network type 1 = Ethernet.
     uint8_t gh[24];
@@ -32,7 +99,7 @@ uint32_t pcapCapture(W5500Raw &eth, uint32_t seconds, uint32_t maxFrames)
     le32(gh + 20, 1);              // LINKTYPE_ETHERNET
     fp.write(gh, 24);
 
-    Serial.printf("\r\nCapturing to %s", PCAP_PATH);
+    Serial.printf("\r\nCapturing to %s (%s)", path, _sdReady ? "SD card" : "LittleFS");
     if (seconds)   Serial.printf(" for %lu s", (unsigned long)seconds);
     if (maxFrames) Serial.printf(", max %lu frames", (unsigned long)maxFrames);
     Serial.println(" (any key stops)...");
@@ -65,16 +132,24 @@ uint32_t pcapCapture(W5500Raw &eth, uint32_t seconds, uint32_t maxFrames)
         if (Serial.available()) { while (Serial.available()) Serial.read(); break; }
     }
     fp.close();
-    Serial.printf("Capture done: %lu frame(s), %lu bytes saved to %s.\r\n",
-                  (unsigned long)n, (unsigned long)bytes, PCAP_PATH);
+    Serial.printf("Capture done: %lu frame(s), %lu bytes saved to %s (%s).\r\n",
+                  (unsigned long)n, (unsigned long)bytes, path,
+                  _sdReady ? "SD card" : "LittleFS");
+    if (!_sdReady)
+        Serial.println("Tip: insert a TF card for larger captures.");
     Serial.println("Download from the web UI (PCAP card) and open in Wireshark.");
     return n;
 }
 
+// =============================================================================
+// pcapSize / pcapDelete
+// =============================================================================
 uint32_t pcapSize()
 {
-    if (!LittleFS.exists(PCAP_PATH)) return 0;
-    File fp = LittleFS.open(PCAP_PATH, "r");
+    const char *path = activePath();
+    fs::FS &fs = activeFs();
+    if (!fs.exists(path)) return 0;
+    File fp = fs.open(path, "r");
     if (!fp) return 0;
     uint32_t s = fp.size();
     fp.close();
@@ -83,5 +158,7 @@ uint32_t pcapSize()
 
 void pcapDelete()
 {
-    if (LittleFS.exists(PCAP_PATH)) LittleFS.remove(PCAP_PATH);
+    // Try both locations
+    if (_sdReady && SD.exists(PCAP_PATH_SD)) SD.remove(PCAP_PATH_SD);
+    if (LittleFS.exists(PCAP_PATH_FS)) LittleFS.remove(PCAP_PATH_FS);
 }

@@ -701,12 +701,13 @@ void WebControl::_routes()
 
     // ---- PCAP capture download ----
     srv->on("/capture.pcap", HTTP_GET, [](AsyncWebServerRequest *req) {
-        if (!LittleFS.exists(PCAP_PATH)) {
+        fs::FS *fs = pcapFs();
+        if (!fs) {
             req->send(404, "text/plain", "No capture stored. Run 'pcap start' first.");
             return;
         }
         AsyncWebServerResponse *res =
-            req->beginResponse(LittleFS, PCAP_PATH, "application/vnd.tcpdump.pcap");
+            req->beginResponse(*fs, pcapPath(), "application/vnd.tcpdump.pcap");
         res->addHeader("Content-Disposition", "attachment; filename=capture.pcap");
         req->send(res);
     });

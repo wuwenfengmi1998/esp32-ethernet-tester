@@ -10,6 +10,7 @@
 #include "net_probe.h"
 #include "wifi_web.h"
 #include "cert_store.h"
+#include "pcap.h"
 #include "cli.h"
 
 // =============================================================================
@@ -46,6 +47,9 @@ void setup()
 
     // Mount the certificate store (LittleFS) used by the EAP-TLS supplicant.
     certStoreBegin();
+
+    // Initialise TF (micro-SD) card for PCAP storage (optional).
+    pcapSdInit();
 
     Serial.println("\r\nInitialising W5500...");
 

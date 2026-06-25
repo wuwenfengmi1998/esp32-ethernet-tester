@@ -1427,9 +1427,11 @@ void CLI::_cmdPcap(char *args)
     char *sub = args ? strtok(args, " \t") : nullptr;
     if (!sub || strcasecmp(sub, "status") == 0) {
         uint32_t sz = pcapSize();
-        if (sz) Serial.printf("\r\nStored capture: %s, %lu bytes. Download from the web UI.\r\n",
-                              PCAP_PATH, (unsigned long)sz);
+        if (sz) Serial.printf("\r\nStored capture: %s (%s), %lu bytes. Download from the web UI.\r\n",
+                              pcapPath(), pcapSdAvailable() ? "SD card" : "LittleFS",
+                              (unsigned long)sz);
         else    Serial.println("\r\nNo capture stored. Use 'pcap start [secs] [maxframes]'.");
+        Serial.printf("Storage: %s\r\n", pcapSdAvailable() ? "TF/SD card" : "internal flash (LittleFS)");
         Serial.println("Subcommands: start [secs] [maxframes] | status | delete");
         return;
     }
