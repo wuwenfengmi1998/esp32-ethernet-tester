@@ -24,6 +24,9 @@ bool pcapSdInit();
 // Returns true if an SD card is present and mounted.
 bool pcapSdAvailable();
 
+// Force-format the SD card as FAT32. Returns true on success.
+bool pcapSdFormat();
+
 // Capture up to `maxFrames` frames (0 = unlimited) for at most `seconds`
 // (0 = until maxFrames or a key press). Returns the number of frames written.
 uint32_t pcapCapture(W5500Raw &eth, uint32_t seconds, uint32_t maxFrames);

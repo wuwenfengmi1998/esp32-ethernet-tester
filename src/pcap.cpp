@@ -6,6 +6,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <string.h>
+#include "ff.h"
 
 #define Serial Out
 
@@ -18,7 +19,8 @@ static SPIClass _sdSpi(HSPI);   // Use HSPI for SD (separate from W5500 on FSPI)
 bool pcapSdInit()
 {
     _sdSpi.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
-    if (SD.begin(PIN_SD_CS, _sdSpi, 4000000UL)) {  // 4 MHz initial
+    // Try normal mount first
+    if (SD.begin(PIN_SD_CS, _sdSpi, 4000000UL, "/sd", 5, false)) {
         _sdReady = true;
         uint64_t totalBytes = SD.totalBytes();
         uint64_t usedBytes  = SD.usedBytes();
@@ -26,8 +28,78 @@ bool pcapSdInit()
                       totalBytes / (1024 * 1024), usedBytes / (1024 * 1024));
         return true;
     }
+    // If normal mount fails, try with format_if_empty (handles blank/corrupt cards)
+    Serial.println("[SD] Normal mount failed, trying with auto-format...");
+    if (SD.begin(PIN_SD_CS, _sdSpi, 4000000UL, "/sd", 5, true)) {
+        _sdReady = true;
+        uint64_t totalBytes = SD.totalBytes();
+        uint64_t usedBytes  = SD.usedBytes();
+        Serial.printf("[SD] TF card formatted and mounted: %llu MB total, %llu MB used.\r\n",
+                      totalBytes / (1024 * 1024), usedBytes / (1024 * 1024));
+        return true;
+    }
     _sdReady = false;
-    Serial.println("[SD] No TF card detected. PCAP will use internal flash (LittleFS).");
+    Serial.println("[SD] No TF card detected or card unreadable. PCAP will use internal flash (LittleFS).");
+    Serial.println("[SD] If a card is inserted, try: sd format");
+    return false;
+}
+
+bool pcapSdFormat()
+{
+    Serial.println("[SD] Formatting TF card (FAT32)...");
+    // End any existing mount
+    if (_sdReady) {
+        SD.end();
+        _sdReady = false;
+    }
+    // Re-init SPI and attempt mount with format
+    _sdSpi.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
+    if (!SD.begin(PIN_SD_CS, _sdSpi, 4000000UL, "/sd", 5, true)) {
+        Serial.println("[SD] Cannot communicate with card. Check card is inserted properly.");
+        return false;
+    }
+    // Card is mounted (possibly auto-formatted). Force a full format via FatFS.
+    SD.end();
+    // Remount to get raw access, then format
+    if (!SD.begin(PIN_SD_CS, _sdSpi, 4000000UL, "/sd", 5, false)) {
+        // Mount failed again - try format_if_empty
+        if (!SD.begin(PIN_SD_CS, _sdSpi, 4000000UL, "/sd", 5, true)) {
+            Serial.println("[SD] Format failed: cannot access card.");
+            return false;
+        }
+    }
+    // Use FatFS f_mkfs to force-format the mounted volume
+    uint8_t *workBuf = (uint8_t *)malloc(4096);
+    if (!workBuf) {
+        Serial.println("[SD] Format failed: out of memory.");
+        return false;
+    }
+    MKFS_PARM opt = {};
+    opt.fmt = FM_FAT32;
+    FRESULT res = f_mkfs("/sd", &opt, workBuf, 4096);
+    free(workBuf);
+    if (res != FR_OK) {
+        Serial.printf("[SD] FAT32 format failed (error %d). Trying FM_ANY...\r\n", res);
+        workBuf = (uint8_t *)malloc(4096);
+        if (workBuf) {
+            opt.fmt = FM_ANY;
+            res = f_mkfs("/sd", &opt, workBuf, 4096);
+            free(workBuf);
+        }
+        if (res != FR_OK) {
+            Serial.printf("[SD] Format failed (error %d). Card may be defective.\r\n", res);
+            return false;
+        }
+    }
+    // Remount clean
+    SD.end();
+    if (SD.begin(PIN_SD_CS, _sdSpi, 4000000UL, "/sd", 5, false)) {
+        _sdReady = true;
+        Serial.printf("[SD] Format complete: %llu MB available.\r\n",
+                      SD.totalBytes() / (1024 * 1024));
+        return true;
+    }
+    Serial.println("[SD] Format succeeded but remount failed.");
     return false;
 }
 

@@ -159,6 +159,7 @@ void CLI::_dispatch(char *line)
     else if (strcasecmp(verb, "dns")      == 0) _cmdDns(args);
     else if (strcasecmp(verb, "snmp")     == 0) _cmdSnmp(args);
     else if (strcasecmp(verb, "pcap")     == 0) _cmdPcap(args);
+    else if (strcasecmp(verb, "sd")       == 0) _cmdSd(args);
     else if (strcasecmp(verb, "link")     == 0) {
         char *op = args ? strtok(args, " \t") : nullptr;
         char *a1 = strtok(nullptr, " \t");
@@ -306,6 +307,11 @@ void CLI::_cmdHelp()
         "  dot1x logoffmac <mac>            Spoofed EAPOL-Logoff (deauth a client)\r\n"
         "  dot1x mab [secs]                 MAB / 802.1X enforcement probe\r\n"
         "  dot1x rogue [secs] [md5]         Rogue authenticator (harvest credentials)\r\n"
+        "\r\n"
+        "SD Card:\r\n"
+        "  sd                               Show TF/SD card info\r\n"
+        "  sd init                          Re-detect / remount the SD card\r\n"
+        "  sd format                        Erase and format SD card (FAT32)\r\n"
         "\r\n"
         "System:\r\n"
         "  reboot | reset                   Restart the device\r\n"
@@ -1452,6 +1458,48 @@ void CLI::_cmdPcap(char *args)
     } else {
         Serial.println("Usage: pcap start [secs] [maxframes] | status | delete");
     }
+}
+
+// =============================================================================
+// sd -- SD/TF card management
+// =============================================================================
+void CLI::_cmdSd(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub || strcasecmp(sub, "info") == 0) {
+        if (pcapSdAvailable()) {
+            Serial.printf("  SD card: mounted, %llu MB total, %llu MB used, %llu MB free\r\n",
+                          SD.totalBytes() / (1024*1024),
+                          SD.usedBytes()  / (1024*1024),
+                          (SD.totalBytes() - SD.usedBytes()) / (1024*1024));
+            Serial.printf("  Card type: ");
+            switch (SD.cardType()) {
+                case CARD_MMC:  Serial.println("MMC"); break;
+                case CARD_SD:   Serial.println("SD"); break;
+                case CARD_SDHC: Serial.println("SDHC"); break;
+                default:        Serial.println("Unknown"); break;
+            }
+        } else {
+            Serial.println("  SD card: not mounted");
+            Serial.println("  Try: sd init | sd format");
+        }
+        return;
+    }
+    if (strcasecmp(sub, "init") == 0) {
+        pcapSdInit();
+        return;
+    }
+    if (strcasecmp(sub, "format") == 0) {
+        Serial.println("WARNING: This will erase ALL data on the SD card!");
+        Serial.println("Formatting...");
+        if (pcapSdFormat()) {
+            Serial.println("SD card formatted successfully.");
+        } else {
+            Serial.println("SD format failed.");
+        }
+        return;
+    }
+    Serial.println("Usage: sd [info] | init | format");
 }
 
 // =============================================================================

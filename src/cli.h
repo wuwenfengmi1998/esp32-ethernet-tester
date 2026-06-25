@@ -102,6 +102,7 @@ private:
     void _cmdRecon(char *args);
     void _cmdIpv6(char *args);
     void _cmdPcap(char *args);
+    void _cmdSd(char *args);
     void _cmdFhrp(char *args);
     void _cmdDhcpv6(char *args);
     void _cmdDns(char *args);

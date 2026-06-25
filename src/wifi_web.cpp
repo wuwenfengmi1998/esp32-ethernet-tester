@@ -279,6 +279,14 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
    </div>
   </div>
 
+  <div class="card"><h2>SD Card</h2>
+   <div class="row">
+    <button onclick="cmd('sd')">Info</button>
+    <button onclick="cmd('sd init')">Re-init</button>
+    <button class="stop" onclick="if(confirm('Erase ALL data on SD card?'))cmd('sd format')">Format</button>
+   </div>
+  </div>
+
   <div class="card"><h2>Port Scanner</h2>
    <div class="row">
     <input id="scnip" placeholder="target IP">
