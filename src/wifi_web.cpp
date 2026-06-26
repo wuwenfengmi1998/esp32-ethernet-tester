@@ -616,27 +616,24 @@ void WebControl::begin(const NetConfig &cfg)
 
     if (MDNS.begin(_hostname)) {
         MDNS.addService("https", "tcp", 443);
-        Serial.printf("mDNS: responder up at https://%s.local/\r\n", _hostname);
+        MDNS.addService("http", "tcp", 80);
+        Serial.printf("mDNS: %s.local\r\n", _hostname);
     }
 
     // Load auth credentials from NVS (defaults: admin/admin, HTTPS on)
     _loadAuth();
 
-    // Always start HTTPS as primary server
-    _startHttps();
+    // Always start HTTP on port 80 (has full API routes)
+    AsyncWebServer *srv = new AsyncWebServer(80);
+    _server = srv;
+    _routes();
+    _applyAuth();
+    srv->begin();
     _serverRunning = true;
+    Serial.println("Web: HTTP server started on port 80 (basic auth enforced).");
 
-    // HTTP on port 80 only as fallback when HTTPS is explicitly disabled
-    if (!_httpsEnabled) {
-        AsyncWebServer *srv = new AsyncWebServer(80);
-        _server = srv;
-        _routes();
-        _applyAuth();
-        srv->begin();
-        Serial.println("Web: HTTP server started on port 80 (HTTPS disabled).");
-    } else {
-        Serial.println("Web: HTTPS server active on port 443 (HTTP disabled).");
-    }
+    // Also start HTTPS on 443 if enabled (serves main page + status)
+    if (_httpsEnabled) _startHttps();
 }
 
 // =============================================================================
@@ -657,12 +654,11 @@ void WebControl::stopServer()
 void WebControl::startServer()
 {
     if (_serverRunning) { Serial.println("Web: server already running."); return; }
-    _startHttps();
-    if (_server && !_httpsEnabled) {
+    if (_server) {
         AsyncWebServer *srv = static_cast<AsyncWebServer *>(_server);
         srv->begin();
-        Serial.println("Web: HTTP server started on port 80.");
     }
+    if (_httpsEnabled) _startHttps();
     _serverRunning = true;
     Serial.println("Web: server started.");
 }
