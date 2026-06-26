@@ -631,9 +631,6 @@ void WebControl::begin(const NetConfig &cfg)
     srv->begin();
     _serverRunning = true;
     Serial.println("Web: HTTP server started on port 80 (basic auth enforced).");
-
-    // Also start HTTPS on 443 if enabled (serves main page + status)
-    if (_httpsEnabled) _startHttps();
 }
 
 // =============================================================================
@@ -720,7 +717,6 @@ void WebControl::_applyAuth()
         authMw.setRealm("Ethernet Tester");
         authMw.setAuthFailureMessage("Authentication required");
         authMw.setAuthType(AsyncAuthType::AUTH_BASIC);
-        authMw.generateHash();
         srv->addMiddleware(&authMw);
         Serial.printf("Web: basic auth enabled (user: %s)\r\n", _authUser);
     } else {
