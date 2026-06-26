@@ -8,6 +8,7 @@
 using HttpsStatusFn = std::function<String()>;
 
 void  httpsSetStatusProvider(HttpsStatusFn fn);
+void  httpsSetAuth(const char *user, const char *pass);
 bool  httpsStart(const char *indexHtml);
 void  httpsStop();
 bool  httpsIsRunning();
