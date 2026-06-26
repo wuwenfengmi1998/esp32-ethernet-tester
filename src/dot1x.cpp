@@ -55,12 +55,13 @@ static const uint8_t EAPTLS_FLAG_S = 0x20;   // EAP-TLS start
 // File-local TX helper: wrap an EAPOL body in an Ethernet frame and send it.
 // =============================================================================
 static bool sendEapolFrame(W5500Raw &eth, const uint8_t mac[6],
-                           uint8_t eapolType, const uint8_t *body, uint16_t bodyLen)
+                           uint8_t eapolType, const uint8_t *body, uint16_t bodyLen,
+                           const uint8_t *dstMac = nullptr)
 {
     uint8_t f[ETH_MIN_LEN + 256];
     memset(f, 0, sizeof(f));
 
-    memcpy(f,     PAE_GROUP_MAC, 6);          // DA: PAE group address
+    memcpy(f,     dstMac ? dstMac : PAE_GROUP_MAC, 6); // DA
     memcpy(f + 6, mac,           6);          // SA: our MAC
     f[12] = (uint8_t)(ETHERTYPE_EAPOL >> 8);
     f[13] = (uint8_t)(ETHERTYPE_EAPOL & 0xFF);
@@ -79,9 +80,21 @@ static bool sendEapolFrame(W5500Raw &eth, const uint8_t mac[6],
 // Construction
 // =============================================================================
 Dot1xTest::Dot1xTest(W5500Raw &eth, const uint8_t mac[6])
-    : _eth(eth)
+    : _eth(eth), _hasTarget(false)
 {
     memcpy(_mac, mac, 6);
+    memset(_target, 0, 6);
+}
+
+void Dot1xTest::setTarget(const uint8_t dstMac[6])
+{
+    if (!dstMac) { _hasTarget = false; memset(_target, 0, 6); return; }
+    // Check for all-zeros
+    bool allZero = true;
+    for (int i = 0; i < 6; i++) if (dstMac[i]) { allZero = false; break; }
+    if (allZero) { _hasTarget = false; memset(_target, 0, 6); return; }
+    memcpy(_target, dstMac, 6);
+    _hasTarget = true;
 }
 
 const char *Dot1xTest::_methodName(uint8_t type)
@@ -106,12 +119,14 @@ const char *Dot1xTest::_methodName(uint8_t type)
 // =============================================================================
 bool Dot1xTest::_sendEapolStart()
 {
-    return sendEapolFrame(_eth, _mac, EAPOL_START, nullptr, 0);
+    return sendEapolFrame(_eth, _mac, EAPOL_START, nullptr, 0,
+                          _hasTarget ? _target : nullptr);
 }
 
 bool Dot1xTest::_sendEapolLogoff()
 {
-    return sendEapolFrame(_eth, _mac, EAPOL_LOGOFF, nullptr, 0);
+    return sendEapolFrame(_eth, _mac, EAPOL_LOGOFF, nullptr, 0,
+                          _hasTarget ? _target : nullptr);
 }
 
 bool Dot1xTest::_sendEap(uint8_t code, uint8_t id, uint8_t type,
@@ -128,7 +143,8 @@ bool Dot1xTest::_sendEap(uint8_t code, uint8_t id, uint8_t type,
     eap[4] = type;
     if (data && dataLen) memcpy(eap + 5, data, dataLen);
 
-    return sendEapolFrame(_eth, _mac, EAPOL_EAP, eap, eapLen);
+    return sendEapolFrame(_eth, _mac, EAPOL_EAP, eap, eapLen,
+                          _hasTarget ? _target : nullptr);
 }
 
 // =============================================================================
@@ -353,7 +369,7 @@ bool Dot1xTest::_sendEapTls(uint8_t id, uint8_t flags, bool includeLen,
 {
     static uint8_t f[18 + 5 + 5 + EAPTLS_FRAG_MAX + 8];
     memset(f, 0, 18);
-    memcpy(f,     PAE_GROUP_MAC, 6);
+    memcpy(f,     _hasTarget ? _target : PAE_GROUP_MAC, 6);
     memcpy(f + 6, _mac,          6);
     f[12] = (uint8_t)(ETHERTYPE_EAPOL >> 8);
     f[13] = (uint8_t)(ETHERTYPE_EAPOL & 0xFF);

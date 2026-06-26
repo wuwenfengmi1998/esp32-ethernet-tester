@@ -50,11 +50,15 @@ void netConfigLoad(NetConfig &cfg)
     cfg.dot1xMethod = (uint8_t)p.getUChar("d1xmeth", cfg.dot1xMethod);
     if (p.isKey("d1xkeypw"))
         p.getString("d1xkeypw", cfg.dot1xKeyPass, sizeof(cfg.dot1xKeyPass));
+    if (p.isKey("d1xtgt"))
+        p.getBytes("d1xtgt", cfg.dot1xTarget, 6);
+    cfg.dot1xTargetIp = p.getUInt("d1xtgtip", cfg.dot1xTargetIp);
     cfg.useDhcp     = p.getBool("dhcp",   cfg.useDhcp);
     cfg.staticIp    = p.getUInt("ip",     cfg.staticIp);
     cfg.staticMask  = p.getUInt("mask",   cfg.staticMask);
     cfg.staticGw    = p.getUInt("gw",     cfg.staticGw);
     cfg.authorizedMode = p.getBool("authz", cfg.authorizedMode);
+    cfg.randomMacDefault = p.getBool("rmacdf", cfg.randomMacDefault);
 
     p.end();
 }
@@ -77,11 +81,14 @@ void netConfigSave(const NetConfig &cfg)
     p.putString("d1xpass", cfg.dot1xPass);
     p.putUChar("d1xmeth", cfg.dot1xMethod);
     p.putString("d1xkeypw", cfg.dot1xKeyPass);
+    p.putBytes("d1xtgt", cfg.dot1xTarget, 6);
+    p.putUInt("d1xtgtip", cfg.dot1xTargetIp);
     p.putBool("dhcp",    cfg.useDhcp);
     p.putUInt("ip",      cfg.staticIp);
     p.putUInt("mask",    cfg.staticMask);
     p.putUInt("gw",      cfg.staticGw);
     p.putBool("authz",   cfg.authorizedMode);
+    p.putBool("rmacdf",  cfg.randomMacDefault);
 
     p.end();
 }

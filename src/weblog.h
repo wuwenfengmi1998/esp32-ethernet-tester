@@ -21,10 +21,14 @@ public:
     static constexpr size_t CAP = 32768;  // 32 KB ring in PSRAM
 
     // ---- Stream input: forward to the real Serial ----
-    int available() override { return ::Serial.available(); }
-    int read() override      { return ::Serial.read(); }
-    int peek() override      { return ::Serial.peek(); }
+    int available() override { return _webAbort ? 1 : ::Serial.available(); }
+    int read() override      { if (_webAbort) { _webAbort = false; return '\x03'; } return ::Serial.read(); }
+    int peek() override      { return _webAbort ? '\x03' : ::Serial.peek(); }
     void flush() override    { ::Serial.flush(); }
+
+    // ---- Web abort: inject a fake byte so Serial.available() checks trigger ----
+    void requestAbort()      { _webAbort = true; }
+    bool abortRequested() const { return _webAbort; }
 
     // ---- Print output: tee to Serial + capture buffer ----
     size_t write(uint8_t c) override;
@@ -49,6 +53,7 @@ private:
     size_t  _head      = 0;         // next write position (wraps)
     size_t  _count     = 0;         // total bytes stored (max CAP)
     bool    _capturing = false;
+    volatile bool _webAbort = false; // set by web UI abort button
 };
 
 // Global tee instance.

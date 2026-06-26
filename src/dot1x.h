@@ -38,6 +38,10 @@ class Dot1xTest {
 public:
     Dot1xTest(W5500Raw &eth, const uint8_t mac[6]);
 
+    // Set a custom destination MAC for EAPOL frames (default: PAE group
+    // 01:80:C2:00:00:03). Pass nullptr or all-zeros to revert to multicast.
+    void setTarget(const uint8_t dstMac[6]);
+
     // Probe the port: send EAPOL-Start and wait for an EAP-Request/Identity.
     // Does NOT transmit any credentials. Returns true if the port enforces
     // 802.1X (i.e. an EAP-Request was observed). Fills `res` if non-null.
@@ -110,6 +114,8 @@ public:
 private:
     W5500Raw &_eth;
     uint8_t   _mac[6];
+    uint8_t   _target[6];       // destination MAC (PAE group unless overridden)
+    bool      _hasTarget;       // true if setTarget() was called with non-zero MAC
 
     bool _sendEapolStart();
     bool _sendEapolLogoff();

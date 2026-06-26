@@ -113,6 +113,8 @@ private:
     void _cmdDhcpv6(char *args);
     void _cmdDns(char *args);
     void _cmdSnmp(char *args);
+    void _cmdOta(char *args);
+    void _cmdAssess(char *args);
     bool _requireArmed();
     bool _requireIp();
     void _cmdReboot();

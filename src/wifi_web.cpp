@@ -3,11 +3,15 @@
 #include "cert_store.h"
 #include "pcap.h"
 #include "https_srv.h"
+#include "ota.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <Update.h>
+#include <esp_task_wdt.h>
+#include <esp_timer.h>
 
 // =============================================================================
 // Embedded control page
@@ -106,7 +110,10 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
   <div class="card" style="display:flex;flex-direction:column;height:100%;margin:0;padding:8px">
    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
     <h2 style="margin:0">Output <span id="run"></span></h2>
+    <div>
+    <button style="padding:3px 8px;font-size:11px;background:#c62828;border:1px solid #a00;color:#fff" onclick="fetch('/api/abort',{method:'POST'})">Abort</button>
     <button style="padding:3px 8px;font-size:11px;background:var(--input);border:1px solid var(--border);color:var(--dim)" onclick="document.getElementById('log').textContent=''">Clear</button>
+    </div>
    </div>
    <pre id="log">(run a command to see output here)</pre>
   </div>
@@ -317,29 +324,51 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
      <input id="rsweepa" placeholder="start IP"><input id="rsweepb" placeholder="end IP">
     </div>
     <div class="row">
-     <button onclick="cmd('recon sweep '+v('rsweepa')+' '+v('rsweepb'))">Ping sweep</button>
-     <button onclick="cmd('arp scan '+v('rsweepa')+' '+v('rsweepb'))">ARP scan</button>
+     <button onclick="if(document.getElementById('nsRandMac').checked)cmd('mac random');cmd('recon sweep '+v('rsweepa')+' '+v('rsweepb'))">Ping sweep</button>
+     <button onclick="if(document.getElementById('nsRandMac').checked)cmd('mac random');cmd('arp scan '+v('rsweepa')+' '+v('rsweepb'))">ARP scan</button>
     </div>
     <div class="row">
      <input id="rtrace" placeholder="target IP">
-     <button onclick="cmd('recon trace '+v('rtrace'))">Traceroute</button>
+     <button onclick="if(document.getElementById('nsRandMac').checked)cmd('mac random');cmd('recon trace '+v('rtrace'))">Traceroute</button>
      <input id="rpsecs" type="number" value="30" style="width:5em">
      <button onclick="cmd('recon passive '+v('rpsecs'))">Passive</button>
+    </div>
+    <div class="row" style="gap:12px">
+     <label style="font-size:12px"><input type="checkbox" id="nsRandMac" style="width:auto"> Random src MAC</label>
     </div>
    </div>
    <div class="card"><h2>Port Scanner</h2>
     <div class="row">
      <input id="scnip" placeholder="target IP">
-     <button onclick="cmd('scan common '+v('scnip'))">Common ports</button>
+     <button onclick="if(document.getElementById('psRandMac').checked)cmd('mac random');cmd('scan common '+v('scnip'))">Common ports</button>
     </div>
     <div class="row">
      <input id="scnp1" type="number" placeholder="first" style="width:5em">
      <input id="scnp2" type="number" placeholder="last" style="width:5em">
-     <button onclick="cmd('scan ports '+v('scnip')+' '+v('scnp1')+' '+v('scnp2'))">Range</button>
+     <button onclick="if(document.getElementById('psRandMac').checked)cmd('mac random');cmd('scan ports '+v('scnip')+' '+v('scnp1')+' '+v('scnp2'))">Range</button>
     </div>
     <div class="row">
      <input id="scnbp" type="number" placeholder="port" style="width:5em">
-     <button onclick="cmd('scan banner '+v('scnip')+' '+v('scnbp'))">Banner</button>
+     <button onclick="if(document.getElementById('psRandMac').checked)cmd('mac random');cmd('scan banner '+v('scnip')+' '+v('scnbp'))">Banner</button>
+    </div>
+    <div class="row" style="gap:12px">
+     <label style="font-size:12px"><input type="checkbox" id="psRandMac" style="width:auto"> Random src MAC</label>
+    </div>
+   </div>
+   <div class="card"><h2>Network Assessment</h2>
+    <div class="row">
+     <input id="asRange" placeholder="CIDR or start IP" style="width:10em">
+     <input id="asEnd" placeholder="end IP (if not CIDR)" style="width:10em">
+    </div>
+    <div class="row">
+     <input id="asPorts" placeholder="ports (default: 21,22,80,443)" style="width:14em">
+    </div>
+    <div class="row" style="gap:12px">
+     <label style="font-size:12px"><input type="checkbox" id="asRand" style="width:auto" checked> Randomize order</label>
+     <label style="font-size:12px"><input type="checkbox" id="asMac" style="width:auto"> Random MAC per host</label>
+    </div>
+    <div class="row">
+     <button class="warn" onclick="let r=v('asRange'),e=v('asEnd'),p=v('asPorts'),f='';if(document.getElementById('asRand').checked)f+=' -r';if(document.getElementById('asMac').checked)f+=' -m';cmd('assess '+r+(e?' '+e:'')+(p?' '+p:'')+f)">Run Assessment</button>
     </div>
    </div>
    <div class="card"><h2>Protocol Listeners</h2>
@@ -371,15 +400,24 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
       <option value="ttls-pap">TTLS/PAP</option><option value="ttls-mschap">TTLS/MSCHAPv2</option>
       <option value="tls">TLS</option>
      </select>
-     <button onclick="cmd('dot1x probe')">Probe</button>
-     <button onclick="cmd('dot1x auth')">Auth</button>
+     <button onclick="if(document.getElementById('d1xRandMac').checked)cmd('mac random');cmd('dot1x probe')">Probe</button>
+     <button onclick="if(document.getElementById('d1xRandMac').checked)cmd('mac random');cmd('dot1x auth')">Auth</button>
      <button class="stop" onclick="cmd('dot1x logoff')">Logoff</button>
+    </div>
+    <div class="row">
+     <input id="d1xtgtmac" placeholder="target MAC (or PAE mcast)" style="width:11em">
+     <input id="d1xtgtip" placeholder="target IP" style="width:8em">
+     <button onclick="let m=v('d1xtgtmac'),i=v('d1xtgtip');if(m)cmd('dot1x target '+m);if(i)cmd('dot1x target '+i)">Set Target</button>
+     <button class="stop" onclick="cmd('dot1x target clear')">Clear</button>
     </div>
     <div class="row">
      <input id="d1xuser" placeholder="identity"><button onclick="cmd('dot1x user '+v('d1xuser'))">Set</button>
     </div>
     <div class="row">
      <input id="d1xpass" type="password" placeholder="password"><button onclick="cmd('dot1x pass '+v('d1xpass'))">Set</button>
+    </div>
+    <div class="row" style="gap:12px">
+     <label style="font-size:12px"><input type="checkbox" id="d1xRandMac" style="width:auto"> Random src MAC</label>
     </div>
     <h3>Certificates</h3>
     <div class="row">
@@ -529,6 +567,9 @@ abort                Stop script
    <button onclick="cmd('help')">CLI help</button>
    <button class="stop" onclick="reboot()">Reboot</button>
   </div>
+  <div class="row" style="gap:12px">
+   <label style="font-size:12px"><input type="checkbox" id="cfgRandMac" style="width:auto" onchange="cmd('mac autorand '+(this.checked?'on':'off'))"> Auto-randomize src MAC</label>
+  </div>
   <h2>Offensive Mode</h2>
   <div class="row">
    <button class="warn" onclick="armDevice()">Arm</button>
@@ -617,6 +658,17 @@ abort                Stop script
    <button onclick="cmd('upload log '+v('uplf'))">Upload log</button>
    <button onclick="cmd('upload pcap')">Upload pcap</button>
   </div>
+  <h2>Firmware Update (OTA)</h2>
+  <div class="row">
+   <input type="file" id="otaFile" accept=".bin" style="font-size:12px;color:var(--dim)">
+   <button class="warn" onclick="otaUpload()">Flash</button>
+  </div>
+  <div class="row">
+   <input id="otaTftp" placeholder="TFTP server IP">
+   <input id="otaFn" placeholder="firmware.bin" style="width:10em">
+   <button class="warn" onclick="cmd('ota tftp '+v('otaTftp')+' '+(v('otaFn')||'firmware.bin'))">TFTP Update</button>
+  </div>
+  <div id="otaProg" style="font-size:11px;color:var(--dim);margin-top:4px"></div>
  </div>
 </div>
 <script>
@@ -624,6 +676,23 @@ function v(i){return document.getElementById(i).value}
 let polling=false, armed=false;
 function openSettings(){document.getElementById('settingsModal').classList.add('show');}
 function closeSettings(){document.getElementById('settingsModal').classList.remove('show');}
+function otaUpload(){
+ let f=document.getElementById('otaFile').files[0];
+ if(!f){alert('Select a .bin firmware file first.');return;}
+ if(!confirm('Flash new firmware? Device will reboot on success.'))return;
+ let prog=document.getElementById('otaProg');
+ prog.textContent='Uploading...';
+ let fd=new FormData();fd.append('file',f,f.name);
+ let xhr=new XMLHttpRequest();
+ xhr.open('POST','/api/ota',true);
+ xhr.withCredentials=true;
+ xhr.timeout=120000;
+ xhr.upload.onprogress=function(e){if(e.lengthComputable)prog.textContent='Uploading: '+Math.round(e.loaded/e.total*100)+'%';};
+ xhr.onload=function(){prog.textContent=xhr.responseText;if(xhr.status===200)setTimeout(()=>location.reload(),5000);};
+ xhr.onerror=function(){prog.textContent='Upload failed (network error). Check device connection.';};
+ xhr.ontimeout=function(){prog.textContent='Upload timed out.';};
+ xhr.send(fd);
+}
 function armDevice(){
  if(!confirm('Enable offensive mode? For authorized lab use only.'))return;
  cmd('arm on');armed=true;updateArmUi();
@@ -727,6 +796,13 @@ function loadCfg(){fetch('/api/config').then(r=>r.json()).then(c=>{
  document.getElementById('apssid').value=c.apssid||'';
  if(c.hasPass)document.getElementById('pass').placeholder='(set)';
  if(c.apHasPass)document.getElementById('appass').placeholder='(set)';
+ var rm=!!c.randmac;
+ document.getElementById('cfgRandMac').checked=rm;
+ document.getElementById('nsRandMac').checked=rm;
+ document.getElementById('psRandMac').checked=rm;
+ document.getElementById('d1xRandMac').checked=rm;
+ document.getElementById('asRand').checked=document.getElementById('asRand').checked;
+ if(rm)document.getElementById('asMac').checked=true;
  modeUi();}).catch(()=>{});}
 function refreshCerts(){fetch('/api/cert').then(r=>r.json()).then(c=>{
  document.getElementById('d1xmethod').value=c.method||'md5';
@@ -1039,6 +1115,55 @@ void WebControl::_routes()
         }
     });
 
+    srv->on("/api/abort", HTTP_POST, [this](AsyncWebServerRequest *req) {
+        if (s_running) {
+            Out.requestAbort();
+            req->send(200, "text/plain", "abort requested");
+        } else {
+            req->send(200, "text/plain", "nothing running");
+        }
+    });
+
+    srv->on("/api/ota", HTTP_POST,
+        [](AsyncWebServerRequest *req) {
+            if (Update.hasError()) {
+                req->send(500, "text/plain", String("OTA failed: ") + Update.errorString());
+            } else {
+                req->send(200, "text/plain", "OTA success! Rebooting...");
+                // Delay restart so the response can be sent
+                static esp_timer_handle_t rst_timer = nullptr;
+                if (!rst_timer) {
+                    esp_timer_create_args_t args = {};
+                    args.callback = [](void *) { ESP.restart(); };
+                    args.name = "ota_rst";
+                    esp_timer_create(&args, &rst_timer);
+                }
+                esp_timer_start_once(rst_timer, 1500000);  // 1.5 s
+            }
+        },
+        [](AsyncWebServerRequest *req, const String &fn, size_t index,
+           uint8_t *data, size_t len, bool final) {
+            if (index == 0) {
+                // Disable task watchdog for this core during flash writes
+                esp_task_wdt_delete(NULL);
+                if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+                    Update.printError(Serial);
+                }
+            }
+            if (!Update.hasError() && len) {
+                if (Update.write(data, len) != len) {
+                    Update.printError(Serial);
+                }
+            }
+            if (final) {
+                if (!Update.end(true)) {
+                    Update.printError(Serial);
+                }
+                // Re-enable watchdog
+                esp_task_wdt_add(NULL);
+            }
+        });
+
     srv->on("/api/result", HTTP_GET, [this](AsyncWebServerRequest *req) {
         String out; Out.snapshot(out);
         bool   running = s_running;
@@ -1064,6 +1189,7 @@ void WebControl::_routes()
         json += ",\"apmode\":";         json += _cfgApMode ? "true" : "false";
         json += ",\"apssid\":\"";       json += jsonEscape(String(_cfgApSsid));
         json += "\",\"apHasPass\":";    json += _cfgApHasPass ? "true" : "false";
+        json += ",\"randmac\":";        json += (_cfgLive && _cfgLive->randomMacDefault) ? "true" : "false";
         json += "}";
         req->send(200, "application/json", json);
     });

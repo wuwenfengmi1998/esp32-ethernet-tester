@@ -21,6 +21,8 @@
 #include "scripting.h"
 #include "logger.h"
 #include "net_util.h"
+#include "ota.h"
+#include "net_assess.h"
 #include "weblog.h"
 #include <WiFi.h>
 #include <esp_timer.h>
@@ -170,6 +172,8 @@ void CLI::_dispatch(char *line)
     else if (strcasecmp(verb, "log")       == 0) _cmdLog(args);
     else if (strcasecmp(verb, "cron")      == 0) _cmdCron(args);
     else if (strcasecmp(verb, "upload")    == 0) _cmdUpload(args);
+    else if (strcasecmp(verb, "ota")       == 0) _cmdOta(args);
+    else if (strcasecmp(verb, "assess")    == 0) _cmdAssess(args);
     else if (strcasecmp(verb, "link")     == 0) {
         char *op = args ? strtok(args, " \t") : nullptr;
         char *a1 = strtok(nullptr, " \t");
@@ -218,6 +222,8 @@ void CLI::_cmdHelp()
         "  stats                            TX/RX counters\r\n"
         "  stats clear                      Reset counters\r\n"
         "  mac  <XX:XX:XX:XX:XX:XX>         Set source MAC\r\n"
+        "  mac  random                      Generate random src MAC\r\n"
+        "  mac  autorand on|off             Auto-randomize MAC (default: off)\r\n"
         "  target <XX:XX:XX:XX:XX:XX>       Set destination MAC\r\n"
         "  loopback on|off                  Reflector mode (echo rx back to sender)\r\n"
         "  send <count> [size]              Send <count> test frames of <size> bytes\r\n"
@@ -403,6 +409,16 @@ void CLI::_cmdHelp()
         "  upload pcap [url]                Upload current pcap capture\r\n"
         "  upload file <path> [url]         Upload any SD file\r\n"
         "\r\n"
+        "Network Assessment:\r\n"
+        "  assess <start> <end> [ports] [-r] [-m]  Combined scan (ping+ARP+ports+SNMP)\r\n"
+        "  assess <cidr> [ports] [-r] [-m]         Same, using CIDR notation\r\n"
+        "                                   -r = randomize scan order\r\n"
+        "                                   -m = random MAC per target\r\n"
+        "                                   Default ports: 21,22,80,443\r\n"
+        "\r\n"
+        "OTA Update:\r\n"
+        "  ota tftp <ip> [filename]         Fetch firmware via TFTP and flash\r\n"
+        "\r\n"
         "System:\r\n"
         "  reboot | reset                   Restart the device\r\n"
         "\r\n"
@@ -464,16 +480,51 @@ void CLI::_cmdMac(char *args)
     if (!args || *args == '\0') {
         char str[18]; macToStr(_src, str);
         Serial.printf("Source MAC: %s\r\n", str);
+        Serial.printf("Auto-randomize: %s\r\n", _cfg.randomMacDefault ? "on" : "off");
+        return;
+    }
+    if (strcasecmp(args, "autorand on") == 0 || strcasecmp(args, "autorand true") == 0) {
+        _cfg.randomMacDefault = true;
+        netConfigSave(_cfg);
+        Serial.println("MAC auto-randomize enabled (will randomize before operations).");
+        return;
+    }
+    if (strcasecmp(args, "autorand off") == 0 || strcasecmp(args, "autorand false") == 0) {
+        _cfg.randomMacDefault = false;
+        netConfigSave(_cfg);
+        Serial.println("MAC auto-randomize disabled.");
+        return;
+    }
+    if (strncasecmp(args, "autorand", 8) == 0) {
+        Serial.printf("MAC auto-randomize: %s\r\n", _cfg.randomMacDefault ? "on" : "off");
+        Serial.println("Usage: mac autorand on|off");
+        return;
+    }
+    if (strcasecmp(args, "random") == 0 || strcasecmp(args, "rand") == 0) {
+        // Generate a random locally-administered unicast MAC
+        uint32_t r1 = esp_random(), r2 = esp_random();
+        _src[0] = (uint8_t)((r1 & 0xFC) | 0x02);  // locally administered, unicast
+        _src[1] = (uint8_t)(r1 >> 8);
+        _src[2] = (uint8_t)(r1 >> 16);
+        _src[3] = (uint8_t)(r1 >> 24);
+        _src[4] = (uint8_t)(r2 & 0xFF);
+        _src[5] = (uint8_t)(r2 >> 8);
+        _inj.setSrcMac(_src);
+        _rfc.setSrcMac(_src);
+        _ip.setMac(_src);
+        char str[18]; macToStr(_src, str);
+        Serial.printf("Source MAC randomized: %s\r\n", str);
         return;
     }
     uint8_t mac[6];
     if (!strToMac(args, mac)) {
-        Serial.println("Invalid MAC. Format: XX:XX:XX:XX:XX:XX");
+        Serial.println("Invalid MAC. Format: XX:XX:XX:XX:XX:XX or 'random'");
         return;
     }
     memcpy(_src, mac, 6);
     _inj.setSrcMac(_src);
     _rfc.setSrcMac(_src);
+    _ip.setMac(_src);
     char str[18]; macToStr(_src, str);
     Serial.printf("Source MAC set to: %s\r\n", str);
 }
@@ -1089,12 +1140,28 @@ void CLI::_cmdDot1x(char *args)
                       _cfg.dot1xPass[0] ? "(set)" : "(unset)");
         Serial.printf("Key passphrase  : %s\r\n",
                       _cfg.dot1xKeyPass[0] ? "(set)" : "(none)");
+        // Show target if set
+        {
+            bool hasMac = false;
+            for (int i = 0; i < 6; i++) if (_cfg.dot1xTarget[i]) { hasMac = true; break; }
+            if (hasMac)
+                Serial.printf("Target MAC      : %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                    _cfg.dot1xTarget[0], _cfg.dot1xTarget[1], _cfg.dot1xTarget[2],
+                    _cfg.dot1xTarget[3], _cfg.dot1xTarget[4], _cfg.dot1xTarget[5]);
+            else
+                Serial.println("Target MAC      : (PAE multicast)");
+            if (_cfg.dot1xTargetIp) {
+                char tbuf[16]; ipToStr(_cfg.dot1xTargetIp, tbuf);
+                Serial.printf("Target IP       : %s\r\n", tbuf);
+            }
+        }
         _printCertLine("CA certificate  ", CertKind::CA);
         _printCertLine("Client cert     ", CertKind::CLIENT);
         _printCertLine("Client key      ", CertKind::KEY);
         Serial.println("Subcommands: method md5|tls|peap|ttls-pap|ttls-mschap | probe |");
         Serial.println("             auth [user] [pass] | user <name> | pass <pw> |");
-        Serial.println("             keypass <pw> | cert [clear ca|client|key|all] | logoff");
+        Serial.println("             keypass <pw> | target <MAC|IP|clear> |");
+        Serial.println("             cert [clear ca|client|key|all] | logoff");
         return;
     }
 
@@ -1138,6 +1205,33 @@ void CLI::_cmdDot1x(char *args)
         Serial.printf("Private-key passphrase %s.\r\n",
                       _cfg.dot1xKeyPass[0] ? "saved" : "cleared");
 
+    } else if (strcasecmp(sub, "target") == 0) {
+        if (!val || strcasecmp(val, "clear") == 0 || strcasecmp(val, "none") == 0) {
+            memset(_cfg.dot1xTarget, 0, 6);
+            _cfg.dot1xTargetIp = 0;
+            netConfigSave(_cfg);
+            Serial.println("802.1X target cleared (using PAE multicast).");
+        } else {
+            // Try MAC first, then IP
+            uint8_t tmac[6];
+            uint32_t tip;
+            if (strToMac(val, tmac)) {
+                memcpy(_cfg.dot1xTarget, tmac, 6);
+                netConfigSave(_cfg);
+                Serial.printf("802.1X target MAC set: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                    tmac[0], tmac[1], tmac[2], tmac[3], tmac[4], tmac[5]);
+            } else if (strToIp(val, &tip)) {
+                _cfg.dot1xTargetIp = tip;
+                netConfigSave(_cfg);
+                char buf[16]; ipToStr(tip, buf);
+                Serial.printf("802.1X target IP set: %s\r\n", buf);
+                // Also try to resolve MAC via ARP
+                Serial.println("Use 'arp resolve <ip>' to populate the target MAC if needed.");
+            } else {
+                Serial.println("Usage: dot1x target <MAC|IP|clear>");
+            }
+        }
+
     } else if (strcasecmp(sub, "cert") == 0) {
         char *op   = val ? strtok(val, " \t") : nullptr;
         char *what = strtok(nullptr, " \t");
@@ -1160,6 +1254,7 @@ void CLI::_cmdDot1x(char *args)
 
     } else if (strcasecmp(sub, "probe") == 0) {
         Dot1xTest d1x(_eth, _src);
+        d1x.setTarget(_cfg.dot1xTarget);
         d1x.probe();
 
     } else if (strcasecmp(sub, "auth") == 0) {
@@ -1172,6 +1267,7 @@ void CLI::_cmdDot1x(char *args)
                 return;
             }
             Dot1xTest d1x(_eth, _src);
+            d1x.setTarget(_cfg.dot1xTarget);
             d1x.authenticateTls(_cfg.dot1xUser,
                                 haveCa ? ca.c_str() : nullptr,
                                 cert.c_str(), key.c_str(),
@@ -1194,6 +1290,7 @@ void CLI::_cmdDot1x(char *args)
             String ca;
             bool haveCa = certStoreRead(CertKind::CA, ca);
             Dot1xTest d1x(_eth, _src);
+            d1x.setTarget(_cfg.dot1xTarget);
             d1x.authenticatePeap("anonymous", user, pass,
                                  haveCa ? ca.c_str() : nullptr);
         } else if (_cfg.dot1xMethod == 3 || _cfg.dot1xMethod == 4) {
@@ -1214,6 +1311,7 @@ void CLI::_cmdDot1x(char *args)
             String ca;
             bool haveCa = certStoreRead(CertKind::CA, ca);
             Dot1xTest d1x(_eth, _src);
+            d1x.setTarget(_cfg.dot1xTarget);
             d1x.authenticateTtls("anonymous", user, pass,
                                  haveCa ? ca.c_str() : nullptr,
                                  _cfg.dot1xMethod == 4);
@@ -1228,11 +1326,13 @@ void CLI::_cmdDot1x(char *args)
                 if (a2) { strncpy(p, a2, sizeof(p) - 1); pass = p; }
             }
             Dot1xTest d1x(_eth, _src);
+            d1x.setTarget(_cfg.dot1xTarget);
             d1x.authenticate(user, pass);
         }
 
     } else if (strcasecmp(sub, "logoff") == 0) {
         Dot1xTest d1x(_eth, _src);
+        d1x.setTarget(_cfg.dot1xTarget);
         d1x.logoff();
 
     } else if (strcasecmp(sub, "startflood") == 0) {
@@ -1240,6 +1340,7 @@ void CLI::_cmdDot1x(char *args)
         char *a1 = val ? strtok(val, " \t") : nullptr;
         uint32_t cnt = a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 1000;
         Dot1xTest d1x(_eth, _src);
+        d1x.setTarget(_cfg.dot1xTarget);
         d1x.startFlood(cnt, true);
 
     } else if (strcasecmp(sub, "logoffmac") == 0) {
@@ -1247,11 +1348,13 @@ void CLI::_cmdDot1x(char *args)
         uint8_t vm[6];
         if (!val || !strToMac(val, vm)) { Serial.println("Usage: dot1x logoffmac <XX:XX:XX:XX:XX:XX>"); return; }
         Dot1xTest d1x(_eth, _src);
+        d1x.setTarget(_cfg.dot1xTarget);
         d1x.logoffSpoof(vm);
 
     } else if (strcasecmp(sub, "mab") == 0) {
         char *a1 = val ? strtok(val, " \t") : nullptr;
         Dot1xTest d1x(_eth, _src);
+        d1x.setTarget(_cfg.dot1xTarget);
         d1x.mabProbe(a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 15);
 
     } else if (strcasecmp(sub, "rogue") == 0) {
@@ -1993,6 +2096,102 @@ void CLI::_cmdSnmp(char *args)
     } else {
         Serial.println("Usage: snmp probe <ip> | sweep <start> <end> [community]");
     }
+}
+
+// =============================================================================
+// assess -- combined network assessment (ping + ARP + port scan)
+// =============================================================================
+void CLI::_cmdAssess(char *args)
+{
+    if (!_requireIp()) return;
+
+    char *a1 = args ? strtok(args, " \t") : nullptr;
+    if (!a1) {
+        Serial.println("Usage: assess <start-ip> <end-ip> [ports] [-r] [-m]");
+        Serial.println("       assess <cidr> [ports] [-r] [-m]");
+        Serial.println("Ports: comma-separated (default: 21,22,80,443)");
+        Serial.println("  -r   Randomize host/port scan order");
+        Serial.println("  -m   Randomize source MAC per target host");
+        Serial.println("Example: assess 192.168.1.0/24 80,443,8080 -r -m");
+        return;
+    }
+
+    uint32_t startIp, endIp;
+    char *portArg = nullptr;
+    uint8_t flags = 0;
+
+    // Try CIDR first
+    if (strchr(a1, '/')) {
+        if (!cidrToRange(a1, &startIp, &endIp)) {
+            Serial.println("Invalid CIDR notation. Example: 192.168.1.0/24");
+            return;
+        }
+        portArg = strtok(nullptr, " \t");
+    } else {
+        // start-ip end-ip format
+        char *a2 = strtok(nullptr, " \t");
+        if (!a2 || !strToIp(a1, &startIp) || !strToIp(a2, &endIp)) {
+            Serial.println("Usage: assess <start-ip> <end-ip> [ports] [-r] [-m]");
+            Serial.println("       assess <cidr> [ports] [-r] [-m]");
+            return;
+        }
+        portArg = strtok(nullptr, " \t");
+    }
+
+    // Parse remaining tokens: port list and flags
+    uint16_t ports[64];
+    uint32_t nPorts = 0;
+
+    // Process portArg and any further tokens
+    while (portArg) {
+        if (strcmp(portArg, "-r") == 0) {
+            flags |= ASSESS_RANDOMIZE_ORDER;
+        } else if (strcmp(portArg, "-m") == 0) {
+            flags |= ASSESS_RANDOMIZE_MAC;
+        } else if (nPorts == 0 && portArg[0] != '-') {
+            // Parse comma-separated port numbers
+            char portBuf[256];
+            strncpy(portBuf, portArg, sizeof(portBuf) - 1);
+            portBuf[sizeof(portBuf) - 1] = '\0';
+            char *tok = strtok(portBuf, ",");
+            while (tok && nPorts < 64) {
+                int p = atoi(tok);
+                if (p > 0 && p <= 65535) {
+                    ports[nPorts++] = (uint16_t)p;
+                }
+                tok = strtok(nullptr, ",");
+            }
+        }
+        portArg = strtok(nullptr, " \t");
+    }
+
+    netAssess(_eth, _ip, _src, startIp, endIp,
+              nPorts > 0 ? ports : nullptr, nPorts, flags);
+}
+
+// =============================================================================
+// OTA update
+// =============================================================================
+void CLI::_cmdOta(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+    if (!sub || strcasecmp(sub, "tftp") != 0) {
+        Serial.println("Usage: ota tftp <server-ip> [filename]");
+        Serial.println("  Default filename: firmware.bin");
+        return;
+    }
+
+    char *ip = strtok(nullptr, " \t");
+    char *fn = strtok(nullptr, " \t");
+
+    if (!ip) {
+        Serial.println("Usage: ota tftp <server-ip> [filename]");
+        return;
+    }
+
+    if (!_requireIp()) return;
+
+    otaTftp(ip, fn ? fn : "firmware.bin");
 }
 
 // =============================================================================
