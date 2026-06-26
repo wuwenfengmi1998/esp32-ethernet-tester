@@ -5,23 +5,15 @@
 #include "net_config.h"
 
 // =============================================================================
-// Wi-Fi manager + ESPAsyncWebServer control interface.
-//
-// On begin():
-//   - If Wi-Fi is enabled and credentials exist, connect as a station and
-//     register an mDNS responder so the device is reachable as <hostname>.local.
-//   - Otherwise (or on connection failure) start a fallback Access Point
-//     ("ESP32-Tester-Setup") hosting the same web UI so credentials can be set.
-//
-// The web UI shows live status (read via a status-provider callback) and lets
-// the user dispatch tester commands. Commands are queued and executed from the
-// main loop (loop()) so the async server callbacks never block.
+// Wi-Fi manager + web control interface (HTTP/HTTPS with optional basic auth).
 // =============================================================================
+
+#define WEB_AUTH_NVS_NS  "webauth"
 
 class WebControl {
 public:
-    using StatusFn  = std::function<String()>;                 // returns JSON
-    using CommandFn = std::function<void(const String &)>;     // run a CLI command
+    using StatusFn  = std::function<String()>;
+    using CommandFn = std::function<void(const String &)>;
     using ConfigFn  = std::function<void(const String &ssid,
                                          const String &pass,
                                          const String &host,
@@ -39,11 +31,25 @@ public:
     // Connect Wi-Fi (or start AP) and start the web server.
     void begin(const NetConfig &cfg);
 
+    // Stop / restart the web server (Wi-Fi stays connected).
+    void stopServer();
+    void startServer();
+    bool isServerRunning() const { return _serverRunning; }
+
     // Drive queued command execution. Call from loop().
     void loop();
 
     bool isConnected() const { return _staConnected; }
     IPAddress ip()     const { return _ip; }
+
+    // Authentication management
+    void setAuthCredentials(const char *user, const char *pass);
+    void clearAuth();
+    bool isAuthEnabled() const { return _authEnabled; }
+
+    // HTTPS management
+    void enableHttps(bool enable);
+    bool isHttpsEnabled() const { return _httpsEnabled; }
 
 private:
     StatusFn  _statusFn;
@@ -55,7 +61,16 @@ private:
     IPAddress _ip;
     char      _hostname[33];
 
-    // Cached NVS config (for the web UI to display current settings).
+    // Auth state
+    bool      _authEnabled = false;
+    char      _authUser[33] = {0};
+    char      _authPass[65] = {0};
+
+    // HTTPS state
+    bool      _httpsEnabled = false;
+    void     *_httpsHandle = nullptr;   // httpd_handle_t
+
+    // Cached NVS config
     char      _cfgSsid[33] = {0};
     char      _cfgHost[33] = {0};
     bool      _cfgWifiEn   = false;
@@ -64,10 +79,13 @@ private:
     char      _cfgApSsid[33] = {0};
     bool      _cfgApHasPass = false;
 
-    // Live NVS config (for the cert/method status endpoint to read current
-    // EAP method + key-passphrase state, which the CLI may change at runtime).
     const NetConfig *_cfgLive = nullptr;
 
-    void *_server = nullptr;     // AsyncWebServer* (opaque to avoid header leak)
+    void *_server = nullptr;     // AsyncWebServer*
+    bool  _serverRunning = false;
     void  _routes();
+    void  _loadAuth();
+    void  _applyAuth();
+    void  _startHttps();
+    void  _stopHttps();
 };

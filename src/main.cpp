@@ -12,6 +12,9 @@
 #include "cert_store.h"
 #include "pcap.h"
 #include "cli.h"
+#include "wg_tunnel.h"
+#include "weblog.h"
+#include <WiFi.h>
 
 // =============================================================================
 // Global state
@@ -27,13 +30,24 @@ static RFC2544     rfc(eth, srcMac, dstMac);
 static IpStack     ipStack(eth, srcMac);
 static DhcpTest    dhcp(ipStack, srcMac);
 static CLI         serialCli(eth, inj, rfc, ipStack, dhcp, netCfg, srcMac, dstMac);
-static WebControl  web;
+WebControl         web;
 
 // The Waveshare ESP32-S3-POE-ETH has no plain status LED (the onboard LED is a
 // WS2812 RGB on GPIO21). GPIO2 is left free here as a generic status output.
 #ifndef LED_BUILTIN
 #define LED_BUILTIN 2
 #endif
+
+// =============================================================================
+// WireGuard TCP CLI bridge — executes a command and returns captured output
+// =============================================================================
+void wgRunCliCommand(const String &line, String &output)
+{
+    Out.beginCapture();
+    serialCli.runCommand(line);
+    Out.snapshot(output);
+    Out.endCapture();
+}
 
 // =============================================================================
 // setup
@@ -100,6 +114,12 @@ void setup()
     });
     web.begin(netCfg);
 
+    // WireGuard VPN tunnel (auto-start if configured + Wi-Fi is connected)
+    WgConfig wgCfg;
+    if (wgLoadConfig(wgCfg) && wgCfg.enabled) {
+        // Delay start until Wi-Fi connects (handled in loop)
+    }
+
     serialCli.begin();
 }
 
@@ -113,4 +133,18 @@ void loop()
     serialCli.loopbackTick();     // Reflect frames if loopback mode is on
     serialCli.advertiseTick();    // Transmit LLDP/CDP advertisements if enabled
     web.loop();                   // Execute queued web commands
+    wgTcpListenerTick();          // Service WireGuard TCP CLI clients
+
+    // Auto-start WireGuard tunnel once Wi-Fi connects
+    static bool _wgAutoStarted = false;
+    if (!_wgAutoStarted && !wgIsActive() && wgGetConfig().enabled && WiFi.isConnected()) {
+        if (wgStart()) {
+            wgTcpListenerStart();
+            // Stop web server if webOff is configured
+            if (wgGetConfig().webOff) {
+                web.stopServer();
+            }
+        }
+        _wgAutoStarted = true;
+    }
 }

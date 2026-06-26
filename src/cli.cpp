@@ -16,6 +16,8 @@
 #include "dns_tool.h"
 #include "snmp_recon.h"
 #include "rogue_auth.h"
+#include "wg_tunnel.h"
+#include "wifi_web.h"
 #include "net_util.h"
 #include "weblog.h"
 #include <WiFi.h>
@@ -160,6 +162,8 @@ void CLI::_dispatch(char *line)
     else if (strcasecmp(verb, "snmp")     == 0) _cmdSnmp(args);
     else if (strcasecmp(verb, "pcap")     == 0) _cmdPcap(args);
     else if (strcasecmp(verb, "sd")       == 0) _cmdSd(args);
+    else if (strcasecmp(verb, "wg")       == 0) _cmdWg(args);
+    else if (strcasecmp(verb, "web")      == 0) _cmdWeb(args);
     else if (strcasecmp(verb, "link")     == 0) {
         char *op = args ? strtok(args, " \t") : nullptr;
         char *a1 = strtok(nullptr, " \t");
@@ -312,6 +316,28 @@ void CLI::_cmdHelp()
         "  sd                               Show TF/SD card info\r\n"
         "  sd init                          Re-detect / remount the SD card\r\n"
         "  sd format                        Erase and format SD card (FAT32)\r\n"
+        "\r\n"
+        "WireGuard VPN:\r\n"
+        "  wg                               Show tunnel status and config\r\n"
+        "  wg set localip <ip>              Set tunnel interface IP (e.g. 10.0.0.2)\r\n"
+        "  wg set privkey <base64>          Set local private key\r\n"
+        "  wg set pubkey <base64>           Set peer public key\r\n"
+        "  wg set endpoint <host|ip>        Set peer endpoint address\r\n"
+        "  wg set port <port>               Set peer endpoint port (default 51820)\r\n"
+        "  wg set psk <base64>              Set pre-shared key (optional)\r\n"
+        "  wg enable                        Enable auto-start on boot\r\n"
+        "  wg disable                       Disable and stop tunnel\r\n"
+        "  wg start                         Start tunnel now\r\n"
+        "  wg stop                          Stop tunnel\r\n"
+        "  wg clear                         Erase all WireGuard config\r\n"
+        "  wg set weboff on|off             Stop web server when tunnel is active\r\n"
+        "\r\n"
+        "Web Server:\r\n"
+        "  web                              Show web server status\r\n"
+        "  web on|off                       Start/stop web server\r\n"
+        "  web auth set <user> <pass>       Set basic-auth credentials (saved)\r\n"
+        "  web auth clear                   Disable authentication\r\n"
+        "  web https on|off                 Enable/disable HTTPS (port 443)\r\n"
         "\r\n"
         "System:\r\n"
         "  reboot | reset                   Restart the device\r\n"
@@ -1500,6 +1526,161 @@ void CLI::_cmdSd(char *args)
         return;
     }
     Serial.println("Usage: sd [info] | init | format");
+}
+
+// =============================================================================
+// wg -- WireGuard VPN tunnel configuration
+// =============================================================================
+void CLI::_cmdWg(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+
+    // wg (no args) or wg status — show current state
+    if (!sub || strcasecmp(sub, "status") == 0) {
+        const WgConfig &c = wgGetConfig();
+        Serial.printf("  WireGuard: %s\r\n", wgIsActive() ? "ACTIVE" : "inactive");
+        Serial.printf("  Enabled:   %s\r\n", c.enabled ? "yes" : "no");
+        Serial.printf("  Local IP:  %s\r\n", c.localIp[0] ? c.localIp : "(not set)");
+        Serial.printf("  Endpoint:  %s:%u\r\n", c.endpoint[0] ? c.endpoint : "(not set)", c.endpointPort);
+        Serial.printf("  Peer key:  %s\r\n", c.peerPubKey[0] ? c.peerPubKey : "(not set)");
+        Serial.printf("  Priv key:  %s\r\n", c.privateKey[0] ? "(set)" : "(not set)");
+        Serial.printf("  PSK:       %s\r\n", c.presharedKey[0] ? "(set)" : "none");
+        Serial.printf("  TCP CLI:   port %d\r\n", WG_TCP_PORT);
+        return;
+    }
+
+    if (strcasecmp(sub, "set") == 0) {
+        char *field = strtok(nullptr, " \t");
+        char *value = strtok(nullptr, "");  // rest of line
+        if (!field || !value) {
+            Serial.println("Usage: wg set <field> <value>");
+            Serial.println("  Fields: localip, privkey, pubkey, endpoint, port, psk");
+            return;
+        }
+        // Trim leading whitespace from value
+        while (*value == ' ' || *value == '\t') value++;
+
+        WgConfig cfg = wgGetConfig();
+        if (strcasecmp(field, "localip") == 0) {
+            strlcpy(cfg.localIp, value, sizeof(cfg.localIp));
+        } else if (strcasecmp(field, "privkey") == 0) {
+            strlcpy(cfg.privateKey, value, sizeof(cfg.privateKey));
+        } else if (strcasecmp(field, "pubkey") == 0) {
+            strlcpy(cfg.peerPubKey, value, sizeof(cfg.peerPubKey));
+        } else if (strcasecmp(field, "endpoint") == 0) {
+            strlcpy(cfg.endpoint, value, sizeof(cfg.endpoint));
+        } else if (strcasecmp(field, "port") == 0) {
+            cfg.endpointPort = (uint16_t)atoi(value);
+        } else if (strcasecmp(field, "psk") == 0) {
+            strlcpy(cfg.presharedKey, value, sizeof(cfg.presharedKey));
+        } else if (strcasecmp(field, "weboff") == 0) {
+            cfg.webOff = (strcasecmp(value, "on") == 0 || strcasecmp(value, "1") == 0 || strcasecmp(value, "true") == 0);
+        } else {
+            Serial.printf("Unknown field: %s\r\n", field);
+            return;
+        }
+        wgSaveConfig(cfg);
+        Serial.printf("  %s = %s (saved)\r\n", field,
+                      (strcasecmp(field, "privkey") == 0 || strcasecmp(field, "psk") == 0)
+                          ? "(hidden)" : value);
+        return;
+    }
+
+    if (strcasecmp(sub, "enable") == 0) {
+        WgConfig cfg = wgGetConfig();
+        cfg.enabled = true;
+        wgSaveConfig(cfg);
+        Serial.println("[WG] Enabled. Tunnel will auto-start when Wi-Fi connects.");
+        Serial.println("     Run 'wg start' to start now, or reboot.");
+        return;
+    }
+
+    if (strcasecmp(sub, "disable") == 0) {
+        WgConfig cfg = wgGetConfig();
+        cfg.enabled = false;
+        wgSaveConfig(cfg);
+        wgStop();
+        Serial.println("[WG] Disabled and stopped.");
+        return;
+    }
+
+    if (strcasecmp(sub, "start") == 0) {
+        if (wgStart()) {
+            wgTcpListenerStart();
+        }
+        return;
+    }
+
+    if (strcasecmp(sub, "stop") == 0) {
+        wgStop();
+        return;
+    }
+
+    if (strcasecmp(sub, "clear") == 0) {
+        wgStop();
+        wgClearConfig();
+        Serial.println("[WG] Config cleared.");
+        return;
+    }
+
+    Serial.println("Usage: wg [status] | set <field> <value> | enable | disable | start | stop | clear");
+    Serial.println("  Fields: localip, privkey, pubkey, endpoint, port, psk");
+}
+
+// =============================================================================
+// web -- Web server control, auth, HTTPS
+// =============================================================================
+extern WebControl web;
+
+void CLI::_cmdWeb(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+
+    // No subcommand: show status
+    if (!sub) {
+        Serial.printf("  Server:  %s\r\n", web.isServerRunning() ? "RUNNING" : "STOPPED");
+        Serial.printf("  Auth:    %s\r\n", web.isAuthEnabled() ? "ENABLED" : "DISABLED");
+        Serial.printf("  HTTPS:   %s\r\n", web.isHttpsEnabled() ? "ENABLED" : "DISABLED");
+        return;
+    }
+
+    if (strcasecmp(sub, "on") == 0) {
+        web.startServer();
+        return;
+    }
+    if (strcasecmp(sub, "off") == 0) {
+        web.stopServer();
+        return;
+    }
+    if (strcasecmp(sub, "auth") == 0) {
+        char *action = strtok(nullptr, " \t");
+        if (!action) { Serial.println("Usage: web auth set <user> <pass> | web auth clear"); return; }
+        if (strcasecmp(action, "set") == 0) {
+            char *user = strtok(nullptr, " \t");
+            char *pass = strtok(nullptr, " \t");
+            if (!user || !pass) { Serial.println("Usage: web auth set <username> <password>"); return; }
+            web.setAuthCredentials(user, pass);
+            Serial.printf("[WEB] Auth set: user=%s\r\n", user);
+            return;
+        }
+        if (strcasecmp(action, "clear") == 0) {
+            web.clearAuth();
+            Serial.println("[WEB] Auth cleared.");
+            return;
+        }
+        Serial.println("Usage: web auth set <user> <pass> | web auth clear");
+        return;
+    }
+    if (strcasecmp(sub, "https") == 0) {
+        char *val = strtok(nullptr, " \t");
+        if (!val) { Serial.println("Usage: web https on|off"); return; }
+        bool on = (strcasecmp(val, "on") == 0 || strcasecmp(val, "1") == 0);
+        web.enableHttps(on);
+        Serial.printf("[WEB] HTTPS %s\r\n", on ? "enabled" : "disabled");
+        return;
+    }
+
+    Serial.println("Usage: web [on|off] | auth set <user> <pass> | auth clear | https on|off");
 }
 
 // =============================================================================

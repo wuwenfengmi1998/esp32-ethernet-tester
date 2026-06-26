@@ -103,6 +103,8 @@ private:
     void _cmdIpv6(char *args);
     void _cmdPcap(char *args);
     void _cmdSd(char *args);
+    void _cmdWg(char *args);
+    void _cmdWeb(char *args);
     void _cmdFhrp(char *args);
     void _cmdDhcpv6(char *args);
     void _cmdDns(char *args);

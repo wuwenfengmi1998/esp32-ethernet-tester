@@ -2,8 +2,10 @@
 #include "weblog.h"
 #include "cert_store.h"
 #include "pcap.h"
+#include "https_srv.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <Preferences.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 
@@ -367,6 +369,40 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
    </div>
    <div class="row"><input id="hn" placeholder="hostname"><button onclick="saveCfg()">Save</button></div>
   </div>
+
+  <div class="card"><h2>WireGuard VPN</h2>
+   <div class="row">
+    <button onclick="cmd('wg')">Status</button>
+    <button onclick="cmd('wg start')">Start</button>
+    <button class="stop" onclick="cmd('wg stop')">Stop</button>
+   </div>
+   <div class="row">
+    <input id="wgip" placeholder="tunnel IP (e.g. 10.0.0.2)">
+    <button onclick="cmd('wg set localip '+v('wgip'))">Set</button>
+   </div>
+   <div class="row">
+    <input id="wgep" placeholder="endpoint host/IP">
+    <input id="wgport" type="number" placeholder="port" value="51820" style="width:6em">
+    <button onclick="cmd('wg set endpoint '+v('wgep'));cmd('wg set port '+v('wgport'))">Set</button>
+   </div>
+   <div class="row">
+    <input id="wgpriv" type="password" placeholder="private key (base64)">
+    <button onclick="cmd('wg set privkey '+v('wgpriv'))">Set</button>
+   </div>
+   <div class="row">
+    <input id="wgpub" placeholder="peer public key (base64)">
+    <button onclick="cmd('wg set pubkey '+v('wgpub'))">Set</button>
+   </div>
+   <div class="row">
+    <input id="wgpsk" type="password" placeholder="pre-shared key (optional)">
+    <button onclick="cmd('wg set psk '+v('wgpsk'))">Set</button>
+   </div>
+   <div class="row">
+    <button onclick="cmd('wg enable')">Enable (auto-start)</button>
+    <button class="stop" onclick="cmd('wg disable')">Disable</button>
+    <button class="stop" onclick="if(confirm('Erase all WireGuard config?'))cmd('wg clear')">Clear</button>
+   </div>
+  </div>
  </div>
 </div>
 <script>
@@ -585,9 +621,138 @@ void WebControl::begin(const NetConfig &cfg)
 
     AsyncWebServer *srv = new AsyncWebServer(80);
     _server = srv;
+
+    // Load auth credentials from NVS and apply
+    _loadAuth();
     _routes();
+    _applyAuth();
+
     srv->begin();
+    _serverRunning = true;
     Serial.println("Web: control server started on port 80.");
+
+    // Start HTTPS if enabled
+    if (_httpsEnabled) _startHttps();
+}
+
+// =============================================================================
+// Stop / Start web server (Wi-Fi stays up)
+// =============================================================================
+void WebControl::stopServer()
+{
+    if (!_server || !_serverRunning) return;
+    _stopHttps();
+    AsyncWebServer *srv = static_cast<AsyncWebServer *>(_server);
+    srv->end();
+    _serverRunning = false;
+    Serial.println("Web: server stopped.");
+}
+
+void WebControl::startServer()
+{
+    if (!_server) return;
+    if (_serverRunning) { Serial.println("Web: server already running."); return; }
+    AsyncWebServer *srv = static_cast<AsyncWebServer *>(_server);
+    srv->begin();
+    _serverRunning = true;
+    Serial.println("Web: server started on port 80.");
+    if (_httpsEnabled) _startHttps();
+}
+
+// =============================================================================
+// Authentication (NVS-backed)
+// =============================================================================
+void WebControl::_loadAuth()
+{
+    Preferences prefs;
+    prefs.begin(WEB_AUTH_NVS_NS, true);
+    String u = prefs.getString("user", "");
+    String p = prefs.getString("pass", "");
+    _httpsEnabled = prefs.getBool("https", false);
+    prefs.end();
+    strlcpy(_authUser, u.c_str(), sizeof(_authUser));
+    strlcpy(_authPass, p.c_str(), sizeof(_authPass));
+    _authEnabled = (_authUser[0] != '\0' && _authPass[0] != '\0');
+}
+
+void WebControl::setAuthCredentials(const char *user, const char *pass)
+{
+    strlcpy(_authUser, user, sizeof(_authUser));
+    strlcpy(_authPass, pass, sizeof(_authPass));
+    _authEnabled = (_authUser[0] != '\0' && _authPass[0] != '\0');
+    Preferences prefs;
+    prefs.begin(WEB_AUTH_NVS_NS, false);
+    prefs.putString("user", _authUser);
+    prefs.putString("pass", _authPass);
+    prefs.end();
+    _applyAuth();
+}
+
+void WebControl::clearAuth()
+{
+    _authUser[0] = '\0';
+    _authPass[0] = '\0';
+    _authEnabled = false;
+    Preferences prefs;
+    prefs.begin(WEB_AUTH_NVS_NS, false);
+    prefs.remove("user");
+    prefs.remove("pass");
+    prefs.end();
+    _applyAuth();
+}
+
+void WebControl::_applyAuth()
+{
+    if (!_server) return;
+    AsyncWebServer *srv = static_cast<AsyncWebServer *>(_server);
+    // Use a static middleware instance that persists for the server lifetime
+    static AsyncAuthenticationMiddleware authMw;
+    if (_authEnabled) {
+        authMw.setUsername(_authUser);
+        authMw.setPassword(_authPass);
+        authMw.setRealm("Ethernet Tester");
+        authMw.setAuthFailureMessage("Authentication required");
+        authMw.setAuthType(AsyncAuthType::AUTH_BASIC);
+        authMw.generateHash();
+        srv->addMiddleware(&authMw);
+        Serial.printf("Web: basic auth enabled (user: %s)\r\n", _authUser);
+    } else {
+        authMw.setAuthType(AsyncAuthType::AUTH_NONE);
+        Serial.println("Web: auth disabled (open access).");
+    }
+}
+
+void WebControl::enableHttps(bool enable)
+{
+    _httpsEnabled = enable;
+    Preferences prefs;
+    prefs.begin(WEB_AUTH_NVS_NS, false);
+    prefs.putBool("https", enable);
+    prefs.end();
+    if (enable && _serverRunning) {
+        _startHttps();
+    } else if (!enable) {
+        _stopHttps();
+    }
+}
+
+// =============================================================================
+// HTTPS server (delegated to https_srv.cpp to avoid header conflicts)
+// =============================================================================
+void WebControl::_startHttps()
+{
+    if (_httpsHandle) return;
+    httpsSetStatusProvider(_statusFn);
+    if (httpsStart(INDEX_HTML)) {
+        _httpsHandle = (void *)1;  // non-null sentinel
+    }
+}
+
+void WebControl::_stopHttps()
+{
+    if (!_httpsHandle) return;
+    httpsStop();
+    _httpsHandle = nullptr;
 }
 
 // =============================================================================
