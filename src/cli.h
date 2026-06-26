@@ -114,6 +114,7 @@ private:
     void _cmdDns(char *args);
     void _cmdSnmp(char *args);
     bool _requireArmed();
+    bool _requireIp();
     void _cmdReboot();
 
     static uint16_t _parseFrameSize(const char *arg, uint16_t defaultSize = 64);

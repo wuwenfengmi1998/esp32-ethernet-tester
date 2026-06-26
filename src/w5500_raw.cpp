@@ -99,6 +99,27 @@ uint8_t W5500Raw::phyCfgr()
     return _readReg8(W5500_PHYCFGR, BSB_COMMON);
 }
 
+void W5500Raw::setPhyMode(uint8_t mode)
+{
+    // PHYCFGR bits [7]=RST [6]=OPMD [5:3]=OPMDC [2:0]=status(RO)
+    // OPMDC: 111=auto, 011=100FD, 010=100HD, 001=10FD, 000=10HD
+    uint8_t opmdc;
+    switch (mode) {
+        case 1: opmdc = 0x03; break; // 100FD
+        case 2: opmdc = 0x02; break; // 100HD
+        case 3: opmdc = 0x01; break; // 10FD
+        case 4: opmdc = 0x00; break; // 10HD
+        default: opmdc = 0x07; break; // auto
+    }
+    // Set OPMD=1 (use register config), write OPMDC, then pulse RST
+    uint8_t val = 0x40 | (opmdc << 3); // OPMD=1, RST=0 (triggers reset)
+    _writeReg8(W5500_PHYCFGR, BSB_COMMON, val);
+    delay(1);
+    val |= 0x80; // release RST
+    _writeReg8(W5500_PHYCFGR, BSB_COMMON, val);
+    delay(50); // allow PHY to settle
+}
+
 // =============================================================================
 // TX
 // =============================================================================

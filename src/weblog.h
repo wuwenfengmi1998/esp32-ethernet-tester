@@ -8,8 +8,8 @@
 // TeeStream — captures serial output so it can be viewed over the web UI.
 //
 // All writes are forwarded to the real Serial port AND, while a capture is
-// active, appended to an in-memory buffer. Stream input (available/read/peek)
-// is forwarded straight to Serial so the CLI continues to work unchanged.
+// active, appended to a ring buffer in PSRAM. The ring keeps the most recent
+// output so long-running commands never show "truncated".
 //
 // Usage: include this header in a .cpp and add `#define Serial Out` AFTER all
 // #include lines. Existing `Serial.print*` calls then tee transparently.
@@ -18,7 +18,7 @@
 // =============================================================================
 class TeeStream : public Stream {
 public:
-    static constexpr size_t CAP = 8192;
+    static constexpr size_t CAP = 32768;  // 32 KB ring in PSRAM
 
     // ---- Stream input: forward to the real Serial ----
     int available() override { return ::Serial.available(); }
@@ -42,12 +42,13 @@ public:
 
 private:
     void _ensureMutex();
+    void _ensureBuf();
 
     SemaphoreHandle_t _mtx = nullptr;
-    char    _buf[CAP];
-    size_t  _len       = 0;
+    char   *_buf       = nullptr;   // PSRAM-allocated ring buffer
+    size_t  _head      = 0;         // next write position (wraps)
+    size_t  _count     = 0;         // total bytes stored (max CAP)
     bool    _capturing = false;
-    bool    _overflow  = false;
 };
 
 // Global tee instance.

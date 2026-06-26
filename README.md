@@ -1,10 +1,10 @@
 # ESP32 Ethernet Tester
 
 A bench tool for stress-testing and validating Ethernet switch ports (built and
-tuned against an Aruba CX6300). An ESP-WROOM-32 drives a WIZnet **W5500 Lite**
-in raw MAC (MACRAW) mode, giving full control over the frames placed on the
-wire. A minimal IPv4 stack layered on top adds L3/DHCP testing, and an optional
-Wi-Fi web interface provides remote control.
+tuned against an Aruba CX6300). An ESP32-S3 drives a WIZnet **W5500** in raw
+MAC (MACRAW) mode, giving full control over the frames placed on the wire. A
+minimal IPv4 stack layered on top adds L3/DHCP testing, and a Wi-Fi web
+interface provides remote control with a tabbed multi-panel UI.
 
 > **Hardware note (FCS):** In MACRAW mode the W5500 auto-calculates and appends
 > the 4-byte FCS, and auto-pads short frames to the 60-byte minimum. As a
@@ -18,6 +18,7 @@ Wi-Fi web interface provides remote control.
 - [Hardware](#hardware)
 - [Wiring](#wiring)
 - [Build & Flash](#build--flash)
+- [Quick-Start Tutorial](#quick-start-tutorial)
 - [Serial CLI Reference](#serial-cli-reference)
 - [Wi-Fi & Web Interface](#wi-fi--web-interface)
 - [L3 / DHCP Testing](#l3--dhcp-testing)
@@ -29,6 +30,9 @@ Wi-Fi web interface provides remote control.
 - [SNMP Recon](#snmp-recon)
 - [Rogue Authenticator](#rogue-authenticator)
 - [RFC 2544 Suite](#rfc-2544-suite)
+- [SD Card & File Manager](#sd-card--file-manager)
+- [WireGuard VPN](#wireguard-vpn)
+- [Scripting & Automation](#scripting--automation)
 - [Architecture](#architecture)
 - [Configuration (NVS)](#configuration-nvs)
 - [Limitations](#limitations)
@@ -60,9 +64,17 @@ Wi-Fi web interface provides remote control.
 | **SNMP recon** | Community-string probe (sysDescr) and IP-range sweep |
 | **Port scanning** | TCP SYN scan, banner grab, common-port scan |
 | **Reconnaissance** | Passive host/protocol mapping, ICMP ping sweep, traceroute |
-| **PCAP capture** | Capture frames to LittleFS file, downloadable from web UI |
-| **Wi-Fi web UI** | STA auto-connect (NVS creds) with AP fallback; async control page + JSON API |
-| **Persistence** | Wi-Fi credentials, hostname, IP config, 802.1X creds stored in NVS |
+| **PCAP capture** | Capture frames to SD card or LittleFS, downloadable from web UI |
+| **SD card** | FAT32 file manager: ls, cat, rm, rename, mkdir, write; PCAP/log storage |
+| **WireGuard VPN** | Tunnel management interface back to a central server |
+| **Scripting** | Run multi-command scripts from SD with delays, loops, and conditionals |
+| **Cron scheduler** | Time-based scheduled command execution (standard cron syntax) |
+| **Output logging** | Tee all CLI output to timestamped log files on SD |
+| **File upload** | HTTP POST upload of logs, pcaps, and arbitrary SD files to a server |
+| **Web server** | HTTPS support, basic-auth, on/off control |
+| **Wi-Fi web UI** | Tabbed multi-panel interface with real-time output; STA + AP modes |
+| **PHY control** | Force link speed/duplex: auto, 100FD, 100HD, 10FD, 10HD |
+| **Persistence** | Wi-Fi credentials, hostname, IP config, 802.1X creds, WireGuard keys stored in NVS |
 
 ---
 
@@ -116,6 +128,135 @@ Library dependencies (fetched automatically): `mathieucarbou/ESPAsyncWebServer`.
 
 On boot the device prints W5500 init status, link state, attempts Wi-Fi (if
 enabled), and presents the `ETH>` prompt.
+
+---
+
+## Quick-Start Tutorial
+
+This walks through a typical first session: boot, get an IP, run some tests,
+and use the web UI.
+
+### 1. Connect and power on
+
+Plug an Ethernet cable from the Waveshare board to a switch port. Connect USB-C
+for serial and power. Open a terminal at 115200 baud:
+
+```
+pio device monitor -b 115200
+```
+
+You should see W5500 init output and `Link: UP`.
+
+### 2. Get an IP address
+
+```
+ETH> ip dhcp
+```
+
+The device performs a full DHCP DORA exchange. Verify with:
+
+```
+ETH> status
+```
+
+If DHCP is unavailable, assign a static address:
+
+```
+ETH> ip static 192.168.1.100 255.255.255.0 192.168.1.1
+```
+
+> Commands that require an IP address (scan, recon sweep/trace, dns, snmp,
+> probe, arp, fhrp hijack) will refuse to run and print a warning if no IP is
+> configured.
+
+### 3. Basic discovery
+
+```
+ETH> discover 30          # Listen for LLDP/CDP from the switch
+ETH> recon passive 20     # Map hosts and protocols on the wire
+ETH> arp scan 192.168.1.1 192.168.1.254  # ARP sweep for live hosts
+```
+
+### 4. Port scanning
+
+```
+ETH> scan common 192.168.1.1       # Scan common ports on the gateway
+ETH> scan banner 192.168.1.1 22    # Grab SSH banner
+```
+
+### 5. Error injection and RFC 2544
+
+```
+ETH> inject giant 10               # Send 10 giant frames
+ETH> inject storm 1000             # Start broadcast storm at 1000 fps
+ETH> inject stop                   # Stop all injection
+
+# For RFC 2544, enable port loopback on the DUT first:
+ETH> test all                      # Full suite (throughput, latency, loss, burst)
+```
+
+### 6. Offensive tests (authorized networks only)
+
+```
+ETH> arm on                        # Enable offensive mode
+ETH> l2 macflood 5000 10000        # CAM table flood
+ETH> arp spoof 192.168.1.50 192.168.1.1 30   # ARP MITM for 30s
+ETH> disarm                        # Lock out offensive tests
+```
+
+### 7. Enable the web UI
+
+```
+ETH> wifi ssid MyNetwork
+ETH> wifi pass MyPassword
+ETH> wifi on
+ETH> reboot
+```
+
+After reboot, browse to `http://esp32-tester.local/`. The tabbed web UI gives
+access to all tools:
+
+| Tab | Contents |
+|-----|----------|
+| **Status** | Live device status, SD card info |
+| **L1/L2** | PHY speed control, traffic generation, loopback |
+| **Inject** | Error injection controls (one-shot and continuous) |
+| **Tests** | RFC 2544, DHCP scenarios, DNS, offensive tests (when armed) |
+| **Recon** | IP config, LLDP/CDP, network scan, port scanner, listeners |
+| **Security** | 802.1X/EAP authentication |
+| **Files** | PCAP capture, SD file browser, log viewer |
+| **Scripts** | Script engine, cron scheduler, inline script runner |
+
+The gear icon in the header opens the **Settings** modal for system controls,
+offensive mode arm/disarm, web server HTTPS, authentication, Wi-Fi, WireGuard,
+and upload destination configuration.
+
+### 8. Scripting (automation)
+
+Create a script on the SD card (via the web file manager or `sd write`):
+
+```
+ETH> sd write /scripts/daily.txt "# Daily port health check"
+ETH> sd write /scripts/daily.txt "ip dhcp"
+ETH> sd write /scripts/daily.txt "delay 2000"
+ETH> sd write /scripts/daily.txt "discover 10"
+ETH> sd write /scripts/daily.txt "recon passive 15"
+ETH> sd write /scripts/daily.txt "arp scan 192.168.1.1 192.168.1.254"
+```
+
+Run it:
+
+```
+ETH> script run /scripts/daily.txt health-check
+```
+
+Output is automatically logged to `/logs/health-check-YYYYMMDD-HHMMSS.log`.
+
+Schedule it with cron:
+
+```
+ETH> cron add 0 6 * * * script run /scripts/daily.txt morning
+```
 
 ---
 
@@ -216,6 +357,7 @@ case-insensitive.
 | `scan ports <ip> <first> <last>` | TCP SYN scan of a port range |
 | `scan banner <ip> <port> [probe]` | Banner grab via full TCP handshake |
 | `link [monitor [secs]]` | Link speed/duplex info or flap monitor |
+| `link speed auto\|100fd\|100hd\|10fd\|10hd` | Force PHY speed/duplex |
 | `wifi scan` | Scan Wi-Fi (rogue-AP / evil-twin recon) |
 | `ipv6 listen [secs]` | Decode IPv6 NDP (RS/RA/NS/NA) |
 | `fhrp listen [secs]` | Decode HSRP/VRRP advertisements |
@@ -253,14 +395,89 @@ case-insensitive.
 | `dot1x mab [secs]` | MAB / 802.1X enforcement probe |
 | `dot1x rogue [secs] [md5]` | Rogue authenticator (harvest EAP credentials) |
 
+### SD Card / File Manager
+| Command | Description |
+|---------|-------------|
+| `sd` | Show TF/SD card info |
+| `sd init` | Re-detect / remount the SD card |
+| `sd format` | Erase and format SD card (FAT32) |
+| `sd ls [path]` | List directory contents |
+| `sd cat <file>` | Print file contents |
+| `sd rm <file>` | Delete a file |
+| `sd rename <old> <new>` | Rename / move a file |
+| `sd mkdir <path>` | Create a directory |
+| `sd write <file> <text>` | Append a line of text to a file |
+
+### WireGuard VPN
+| Command | Description |
+|---------|-------------|
+| `wg` | Show tunnel status and config |
+| `wg set localip <ip>` | Set tunnel interface IP |
+| `wg set privkey <base64>` | Set local private key |
+| `wg set pubkey <base64>` | Set peer public key |
+| `wg set endpoint <host\|ip>` | Set peer endpoint address |
+| `wg set port <port>` | Set peer endpoint port (default 51820) |
+| `wg set psk <base64>` | Set pre-shared key (optional) |
+| `wg enable` | Enable auto-start on boot |
+| `wg disable` | Disable and stop tunnel |
+| `wg start` | Start tunnel now |
+| `wg stop` | Stop tunnel |
+| `wg clear` | Erase all WireGuard config |
+
+### Scripting & Automation
+| Command | Description |
+|---------|-------------|
+| `script` | Show script engine status |
+| `script list` | List scripts on SD (`/scripts/`) |
+| `script run <file> [logname]` | Run a script (optional auto-log) |
+| `script stop` | Abort running script |
+| `script create <file>` | Create a template script on SD |
+
+### Output Logging
+| Command | Description |
+|---------|-------------|
+| `log` | Show logger status |
+| `log start [name]` | Start logging to SD (auto-name if omitted) |
+| `log stop` | Stop logging |
+| `log list` | List log files on SD |
+| `log delete <file>` | Delete a log file |
+| `log flush` | Force flush to SD |
+
+### Cron Scheduler
+| Command | Description |
+|---------|-------------|
+| `cron` | List scheduled tasks |
+| `cron add <min> <hr> <dom> <mon> <dow> <cmd>` | Add a cron entry |
+| `cron remove <index>` | Remove entry by index |
+| `cron reload` | Re-read `/cron.txt` from SD |
+| `cron clear` | Remove all entries |
+
+### File Upload
+| Command | Description |
+|---------|-------------|
+| `upload` | Show upload destination config |
+| `upload set <url> [user] [pass]` | Set default upload server |
+| `upload clear` | Clear upload destination |
+| `upload log <name> [url]` | Upload a log file (HTTP POST) |
+| `upload pcap [url]` | Upload current pcap capture |
+| `upload file <path> [url]` | Upload any SD file |
+
 ### Wi-Fi / Web (persisted to NVS)
 | Command | Description |
 |---------|-------------|
 | `wifi` | Show Wi-Fi status |
 | `wifi ssid <ssid>` | Set SSID |
 | `wifi pass <password>` | Set password |
+| `wifi mode ap\|sta` | Mgmt as soft AP (field) or station |
+| `wifi apssid <ssid>` | Set soft-AP SSID |
+| `wifi appass <password>` | Set soft-AP password (>=8 chars, blank=open) |
 | `wifi on\|off` | Enable/disable Wi-Fi on boot |
 | `host <hostname>` | Set device hostname (used by the mDNS responder) |
+| `web` | Show web server status |
+| `web on\|off` | Start/stop web server |
+| `web auth set <user> <pass>` | Set basic-auth credentials (saved) |
+| `web auth clear` | Disable authentication |
+| `web https on\|off` | Enable/disable HTTPS (port 443) |
 
 > Wi-Fi/host changes are saved immediately but applied on the next **reboot**.
 
@@ -276,28 +493,61 @@ Implemented in [src/wifi_web.cpp](src/wifi_web.cpp).
 2. **AP fallback:** if no credentials exist or the connection fails, it starts
    an open AP named **`ESP32-Tester-Setup`** hosting the same control page so
    credentials can be entered.
+3. **Soft-AP mode (`wifi mode ap`):** the device always broadcasts its own AP
+   for field use without infrastructure Wi-Fi.
 
 ### Web UI
-Browse to `http://<hostname>.local/` (STA) or the AP IP (fallback). The page
-provides:
-- **Status** — auto-refreshing link/speed/duplex, MAC, IP config, counters, and
-  injection state (polls `/api/status`).
-- **Error injection** — one-shot and continuous controls.
-- **DHCP test** — buttons for every DHCP scenario.
-- **Reachability probe** — resolve + ping a `.local` host.
-- **Configuration** — set Wi-Fi SSID/password/hostname (saved to NVS).
+
+Browse to `http://<hostname>.local/` (STA) or the AP IP (fallback). The
+interface uses a **tabbed layout** with eight functional tabs:
+
+| Tab | Contents |
+|-----|----------|
+| **Status** | Auto-refreshing device status (link, speed, MAC, IP, counters, heap, SD), SD card init/format |
+| **L1/L2** | PHY speed selector, traffic generation (send frames), loopback toggle |
+| **Inject** | One-shot and continuous error injection controls |
+| **Tests** | RFC 2544 suite, DHCP test scenarios, DNS resolve, offensive tests (hidden until armed) |
+| **Recon** | IP configuration (DHCP/static), LLDP/CDP discovery, network scan, port scanner, protocol listeners |
+| **Security** | 802.1X/EAP authentication (method, credentials, auth) |
+| **Files** | PCAP capture start/stop/download, SD card file browser, log file viewer |
+| **Scripts** | Script engine (run/stop/list), cron scheduler, inline multi-line script runner |
+
+A **gear icon** in the header opens the **Settings** modal with:
+- System info and reboot
+- Offensive mode arm/disarm (with confirmation dialog)
+- Web server on/off and HTTPS toggle
+- Basic authentication set/clear
+- Wi-Fi configuration (STA and AP mode)
+- WireGuard VPN full config
+- Upload destination
+
+The UI auto-detects mobile/desktop layouts and includes an output panel that
+streams command results in real time.
+
+### Security
+
+- **Basic auth:** `web auth set <user> <pass>` protects all endpoints (saved to
+  NVS, survives reboot).
+- **HTTPS:** `web https on` enables TLS on port 443 with an auto-generated
+  self-signed certificate.
+- **Arm/disarm:** offensive tests are hidden in the web UI and blocked in the
+  CLI until the device is explicitly armed.
 
 ### HTTP API
 | Method | Path | Body | Purpose |
 |--------|------|------|---------|
-| `GET`  | `/` | — | Control page (HTML) |
-| `GET`  | `/api/status` | — | JSON status object |
+| `GET`  | `/` | -- | Control page (HTML) |
+| `GET`  | `/api/status` | -- | JSON status object |
 | `POST` | `/api/cmd` | `c=<command>` | Queue a CLI command for execution |
+| `GET`  | `/api/result` | -- | Poll command output and running state |
 | `POST` | `/api/config` | `ssid,pass,host,wifi` | Save Wi-Fi config to NVS |
+| `GET`  | `/api/files` | -- | List SD card files (JSON) |
+| `GET`  | `/api/download?f=<path>` | -- | Download a file from SD |
+| `POST` | `/api/upload` | multipart file | Upload a file to SD |
 
 Commands received over HTTP are **queued and executed from the main loop** so
-the async server callbacks never block; detailed command output appears on the
-serial console.
+the async server callbacks never block; output appears in the web output panel
+via polling.
 
 ---
 
@@ -445,6 +695,72 @@ Frame sizes and durations are configured in [include/config.h](include/config.h)
 
 ---
 
+## SD Card & File Manager
+
+The Waveshare ESP32-S3-POE-ETH has an onboard TF (micro-SD) card slot connected
+via a dedicated HSPI bus (separate from the W5500 SPI). Insert a FAT32-formatted
+micro-SD card for:
+
+- **PCAP capture storage** (larger captures than LittleFS allows)
+- **Script storage** (`/scripts/*.txt`)
+- **Output logging** (`/logs/*.log`)
+- **Cron configuration** (`/cron.txt`)
+- **General file storage** (certificates, configs, data exports)
+
+The SD card is auto-detected on boot. Use `sd init` to remount after hot-insert,
+or `sd format` to erase and format.
+
+| Pin | ESP32-S3 GPIO |
+|-----|---------------|
+| CS  | 4 |
+| MOSI | 6 |
+| MISO | 5 |
+| SCK | 7 |
+
+---
+
+## WireGuard VPN
+
+The device can establish a WireGuard tunnel over Wi-Fi for secure remote
+management. Configure via CLI or the web Settings modal:
+
+```
+ETH> wg set localip 10.0.0.2
+ETH> wg set privkey <base64-private-key>
+ETH> wg set pubkey <base64-peer-public-key>
+ETH> wg set endpoint vpn.example.com
+ETH> wg set port 51820
+ETH> wg enable
+ETH> reboot
+```
+
+When enabled, the tunnel starts automatically on boot after Wi-Fi connects. The
+`wg set weboff on` option stops the web server when the tunnel is active
+(security hardening for field deployments).
+
+---
+
+## Scripting & Automation
+
+Scripts are plain-text files on the SD card (one CLI command per line). Special
+directives:
+
+| Directive | Description |
+|-----------|-------------|
+| `# comment` | Ignored |
+| `delay <ms>` | Pause execution for N milliseconds |
+| `repeat <n>` | Repeat the next command N times |
+| `loop <n>` ... `endloop` | Loop a block of commands N times |
+| `if <condition>` ... `endif` | Conditional execution |
+| `log start [name]` | Start output logging within script |
+| `log stop` | Stop logging |
+
+The **cron scheduler** reads `/cron.txt` from the SD card on boot (standard
+5-field cron format) and executes commands at the scheduled times. The device
+must have NTP time (obtained automatically via Wi-Fi) for cron to function.
+
+---
+
 ## Architecture
 
 ```
@@ -500,9 +816,10 @@ Frame sizes and durations are configured in [include/config.h](include/config.h)
 | [src/portscan.cpp](src/portscan.cpp) | TCP SYN scan + banner grab |
 | [src/recon.cpp](src/recon.cpp) | Passive recon, ping sweep, traceroute |
 | [src/linkdiag.cpp](src/linkdiag.cpp) | Link diagnostics + flap monitor |
-| [src/pcap.cpp](src/pcap.cpp) | PCAP capture to LittleFS |
+| [src/pcap.cpp](src/pcap.cpp) | PCAP capture to SD card or LittleFS |
 | [src/net_config.cpp](src/net_config.cpp) | NVS persistence (Preferences) |
-| [src/wifi_web.cpp](src/wifi_web.cpp) | Wi-Fi STA/AP + ESPAsyncWebServer UI |
+| [src/wifi_web.cpp](src/wifi_web.cpp) | Wi-Fi STA/AP + ESPAsyncWebServer tabbed UI |
+| [src/weblog.cpp](src/weblog.cpp) | TeeStream ring buffer for web output capture |
 | [src/cli.cpp](src/cli.cpp) | Serial command parser and dispatch |
 | [include/config.h](include/config.h) | Pins, constants, defaults |
 
@@ -519,8 +836,21 @@ Persisted via the `Preferences` library in the **`tester`** namespace
 | `pass` | Wi-Fi password | (empty) |
 | `host` | Hostname (`<host>.local`) | `esp32-tester` |
 | `wifiEn` | Connect Wi-Fi on boot | `false` |
+| `wifiMode` | Wi-Fi mode (0=STA, 1=AP) | `0` |
+| `apSsid` | Soft-AP SSID | `ESP32-Tester` |
+| `apPass` | Soft-AP password | (empty/open) |
 | `dhcp` | Use DHCP for the Ethernet IP | `true` |
 | `ip` / `mask` / `gw` | Static IPv4 config | `0` / `255.255.255.0` / `0` |
+| `webUser` / `webPass` | Basic-auth credentials | (empty/disabled) |
+| `httpsOn` | HTTPS enabled | `false` |
+| `armed` | Offensive mode state | `false` |
+| `wgLocalIp` | WireGuard tunnel IP | (empty) |
+| `wgPrivKey` | WireGuard private key | (empty) |
+| `wgPubKey` | WireGuard peer public key | (empty) |
+| `wgEndpoint` | WireGuard peer endpoint | (empty) |
+| `wgPort` | WireGuard peer port | `51820` |
+| `wgEnabled` | WireGuard auto-start | `false` |
+| `uploadUrl` | Default upload server URL | (empty) |
 
 ---
 
@@ -544,30 +874,33 @@ These stem from the W5500 hardware operating in MACRAW mode:
 
 ## Troubleshooting
 
-### W5500 init fails — `Version check failed`
+### W5500 init fails -- `Version check failed`
 The driver reads the W5500 version register (expected `0x04`). The value read is
 diagnostic:
 
 | Read value | Likely cause |
 |------------|--------------|
-| `0x7F` or random | SPI returning garbage — usually the **MISO** line (loose/long/swapped) or clock too fast. The clock is already at 8 MHz; recheck MISO ↔ GPIO19. |
-| `0x00` | MISO delivering no data — MISO disconnected, **no 3.3 V power**, or CS not reaching the chip. Verify 3V3/GND on the module and CS ↔ GPIO5. |
+| `0x7F` or random | SPI returning garbage -- MISO line issue or clock too fast. |
+| `0x00` | MISO delivering no data -- disconnected or no 3.3 V power. |
 | `0xFF` | MISO stuck high / module unpowered or absent. |
 
-Checklist, in order:
-1. **Power** — the W5500 Lite is **3.3 V only**; feed it from 3V3 (not 5V).
-   It draws ~130 mA; a brownout corrupts SPI.
-2. **MISO** — most common culprit; reseat GPIO19 ↔ MISO, confirm not swapped
-   with MOSI.
-3. **CS / RST** — CS ↔ GPIO5, RST ↔ GPIO17 (kept off the GPIO2 strapping pin).
-4. **Clock** — already 8 MHz in [include/config.h](include/config.h); keep wires
-   short.
+On the Waveshare ESP32-S3-POE-ETH, SPI is onboard -- if init fails, check for
+a damaged board or firmware misconfiguration.
 
 ### Web UI not reachable
-- In STA mode, confirm the device connected (serial prints the IP) and try the
-  IP directly if `<hostname>.local` mDNS resolution fails.
-- In AP fallback mode, join **`ESP32-Tester-Setup`** and browse to the AP IP
-  printed on the console.
+- Check `wifi` shows connected (serial prints the IP on boot).
+- Try the IP directly if `<hostname>.local` mDNS resolution fails.
+- Verify `web` shows the server is running (`web on` to start).
+- If basic auth is set, the browser will prompt for credentials.
+- In AP mode, join the AP SSID and browse to the AP IP printed on console.
+
+### Commands refuse to run -- "No IP address configured"
+Commands that require network connectivity (scan, recon sweep/trace, dns, snmp,
+probe, arp scan/spoof/storm, fhrp hijack) require an IP address. Run:
+```
+ETH> ip dhcp
+```
+or assign a static IP before using these tools.
 
 ### DHCP / probe commands do nothing useful
 These depend on the W5500 being initialised and the link being up. Resolve any

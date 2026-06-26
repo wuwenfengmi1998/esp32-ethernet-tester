@@ -19,7 +19,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
 <style>
 :root{--bg:#0f1419;--card:#161b22;--border:#30363d;--text:#e6e6e6;--dim:#8b949e;
  --green:#238636;--warn:#9e6a03;--stop:#b62324;--accent:#1f6feb;--input:#0d1117;
- --ok:#3fb950;--bad:#f85149}
+ --ok:#3fb950;--bad:#f85149;--tab:#21262d;--tab-active:var(--accent)}
 *{box-sizing:border-box}
 body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--text);font-size:14px}
 header{background:var(--accent);padding:6px 16px;position:sticky;top:0;z-index:100}
@@ -31,18 +31,19 @@ header h1{margin:0;font-size:15px;font-weight:600}
 #layoutToggle{font-size:11px;padding:4px 8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:4px;cursor:pointer}
 .hdr-stats{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;padding:4px 0 0;opacity:.9}
 .hdr-stats span{background:rgba(0,0,0,.25);border-radius:10px;padding:2px 8px;white-space:nowrap}
-
-/* Desktop layout: output left, controls right */
 .desktop .main{display:grid;grid-template-columns:1fr 1fr;gap:0;height:calc(100vh - 68px);overflow:hidden}
 .desktop .panel-left{overflow-y:auto;padding:12px;border-right:1px solid var(--border)}
-.desktop .panel-right{overflow-y:auto;padding:12px}
-
-/* Mobile layout: single column, output at top (collapsible) */
+.desktop .panel-right{overflow-y:auto;padding:0}
 .mobile .main{display:flex;flex-direction:column;min-height:calc(100vh - 68px)}
 .mobile .panel-left{order:1;padding:8px;max-height:200px;overflow-y:auto;border-bottom:1px solid var(--border);flex-shrink:0}
-.mobile .panel-right{order:2;padding:8px;overflow-y:auto;flex:1}
+.mobile .panel-right{order:2;overflow-y:auto;flex:1}
 .mobile .panel-left.collapsed{max-height:36px;overflow:hidden}
-
+.tabs{display:flex;flex-wrap:wrap;background:var(--tab);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
+.tab-btn{background:none;border:none;color:var(--dim);padding:8px 12px;font-size:12px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;margin:0}
+.tab-btn.active{color:var(--text);border-bottom-color:var(--tab-active);background:rgba(31,111,235,.1)}
+.tab-btn:hover{color:var(--text);background:rgba(255,255,255,.05)}
+.tab-content{display:none;padding:12px}
+.tab-content.active{display:block}
 .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin:0 0 10px}
 h2{font-size:13px;margin:0 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
 h3{font-size:12px;margin:6px 0 4px;color:var(--dim)}
@@ -51,7 +52,8 @@ td{padding:2px 6px}td:first-child{color:var(--dim);width:45%}
 button{background:var(--green);border:0;color:#fff;padding:7px 11px;border-radius:6px;margin:2px;cursor:pointer;font-size:12px;white-space:nowrap}
 button.warn{background:var(--warn)}button.stop{background:var(--stop)}
 button:active{opacity:.7}
-input,select{background:var(--input);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;margin:2px 0;width:100%;font-size:13px}
+input,select,textarea{background:var(--input);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;margin:2px 0;width:100%;font-size:13px}
+textarea{font-family:monospace;resize:vertical;min-height:80px}
 .row{display:flex;gap:6px;flex-wrap:wrap;margin:3px 0}.row>*{flex:1;min-width:0}
 .row>button{flex:0 0 auto}
 pre{background:var(--input);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;
@@ -59,13 +61,23 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
 .desktop pre{height:calc(100vh - 180px)}
 .mobile pre{max-height:140px}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
-.status-bar{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;padding:6px 0;margin-bottom:6px}
-.status-bar .pill{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:3px 10px}
 .toggle-out{background:none;border:1px solid var(--border);color:var(--dim);padding:4px 8px;font-size:11px;margin-bottom:6px}
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;padding:16px}
+.modal-overlay.show{display:flex}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;max-width:500px;width:100%;max-height:80vh;overflow-y:auto}
+.modal h2{margin-top:12px}
+.modal-close{float:right;background:var(--input);border:1px solid var(--border);color:var(--dim);padding:4px 10px;font-size:14px;cursor:pointer;border-radius:6px}
+.file-list{max-height:300px;overflow-y:auto;font-size:12px;font-family:monospace}
+.file-list div{padding:3px 6px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.file-list div:hover{background:rgba(255,255,255,.03)}
+.file-list .fname{flex:1;overflow:hidden;text-overflow:ellipsis}
+.file-list .fsize{color:var(--dim);margin-left:8px;white-space:nowrap}
+.file-list .factions button{padding:3px 6px;font-size:11px;margin:0 2px}
 @media(max-width:900px){
  body:not(.force-desktop) .main{display:flex!important;flex-direction:column}
  body:not(.force-desktop) .panel-left{order:1;max-height:200px;border-right:none;border-bottom:1px solid var(--border)}
  body:not(.force-desktop) .panel-right{order:2;flex:1}
+ .tab-btn{padding:6px 9px;font-size:11px}
 }
 </style></head><body class="desktop">
 <header>
@@ -77,18 +89,15 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
     <option value="2000" selected>2s</option><option value="5000">5s</option>
    </select>
    <button onclick="refresh()">&#8635;</button>
-   <button class="stop" onclick="reboot()" title="Reboot">&#9211; Reboot</button>
+   <button onclick="openSettings()" title="Settings" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.3);color:#fff">&#9881;</button>
+   <button class="stop" onclick="reboot()" title="Reboot">&#9211;</button>
    <button id="layoutToggle" onclick="toggleLayout()">Mobile</button>
   </div>
  </div>
  <div class="hdr-stats" id="hdrStats">
-  <span id="hsLink">Link: --</span>
-  <span id="hsMgmt">Mgmt: --</span>
-  <span id="hsIP">Eth IP: --</span>
-  <span id="hsHeap">Heap: --</span>
-  <span id="hsSd">SD: --</span>
-  <span id="hsUp">Up: --</span>
-  <span id="hsVer"></span>
+  <span id="hsLink">Link: --</span><span id="hsMgmt">Mgmt: --</span>
+  <span id="hsIP">Eth: --</span><span id="hsHeap">Heap: --</span>
+  <span id="hsSd">SD: --</span><span id="hsUp">Up: --</span><span id="hsVer"></span>
  </div>
 </header>
 <div class="main">
@@ -103,311 +112,535 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
   </div>
  </div>
  <div class="panel-right">
-  <div class="card"><h2>Status</h2>
-   <table id="st"><tr><td>loading...</td></tr></table>
+  <div class="tabs" id="tabBar">
+   <button class="tab-btn active" onclick="showTab('status')">Status</button>
+   <button class="tab-btn" onclick="showTab('l1l2')">L1/L2</button>
+   <button class="tab-btn" onclick="showTab('inject')">Inject</button>
+   <button class="tab-btn" onclick="showTab('test')">Tests</button>
+   <button class="tab-btn" onclick="showTab('recon')">Recon</button>
+   <button class="tab-btn" onclick="showTab('security')">Security</button>
+   <button class="tab-btn" onclick="showTab('files')">Files</button>
+   <button class="tab-btn" onclick="showTab('scripts')">Scripts</button>
   </div>
 
-  <div class="card"><h2>General / Traffic</h2>
-   <div class="row">
-    <button onclick="cmd('stats')">Stats</button>
-    <button class="warn" onclick="cmd('stats clear')">Clear</button>
-    <button onclick="cmd('loopback on')">Loop on</button>
-    <button class="stop" onclick="cmd('loopback off')">Loop off</button>
+  <!-- STATUS TAB -->
+  <div class="tab-content active" id="tab-status">
+   <div class="card"><h2>Device Status</h2>
+    <table id="st"><tr><td>loading...</td></tr></table>
    </div>
-   <div class="row">
-    <input id="smac" placeholder="source MAC XX:XX:..">
-    <button onclick="cmd('mac '+v('smac'))">Set</button>
-   </div>
-   <div class="row">
-    <input id="tmac" placeholder="target MAC XX:XX:..">
-    <button onclick="cmd('target '+v('tmac'))">Set</button>
-   </div>
-   <div class="row">
-    <input id="scount" type="number" placeholder="count" value="100" style="width:6em">
-    <input id="ssize" type="number" placeholder="size" value="64" style="width:5em">
-    <button onclick="cmd('send '+v('scount')+' '+v('ssize'))">Send</button>
-   </div>
-  </div>
-
-  <div class="card"><h2>Error Injection</h2>
-   <div class="row">
-    <button onclick="cmd('inject runt')">Runt</button>
-    <button onclick="cmd('inject giant')">Giant</button>
-    <button onclick="cmd('inject jumbo')">Jumbo</button>
-    <button onclick="cmd('inject badtype')">BadType</button>
-    <button onclick="cmd('inject broadcast')">Bcast</button>
-    <button onclick="cmd('inject multicast')">Mcast</button>
-    <button onclick="cmd('inject pause')">PAUSE</button>
-   </div>
-   <div class="row">
-    <select id="ptype"><option>zeros</option><option>ones</option><option>alt</option><option>incr</option><option>random</option></select>
-    <input id="plen" type="number" placeholder="len" value="64" style="width:5em">
-    <input id="pn" type="number" placeholder="n" value="100" style="width:5em">
-    <button onclick="cmd('inject pattern '+v('ptype')+' '+v('plen')+' '+v('pn'))">Pattern</button>
-   </div>
-   <div class="row">
-    <input id="srate" type="number" placeholder="Hz" value="1000" style="width:6em">
-    <button class="warn" onclick="cmd('inject storm '+v('srate'))">Storm</button>
-    <select id="ctype"><option>giant</option><option>jumbo</option><option>badtype</option><option>broadcast</option><option>multicast</option><option>pause</option><option>pattern</option></select>
-    <input id="crate" type="number" placeholder="fps" value="1000" style="width:5em">
-    <button class="warn" onclick="cmd('inject continuous '+v('ctype')+' '+v('crate'))">Cont.</button>
-   </div>
-   <div class="row"><button class="stop" onclick="cmd('inject stop')">Stop all injection</button></div>
-  </div>
-
-  <div class="card"><h2>RFC 2544 (DUT loopback)</h2>
-   <div class="row">
-    <input id="rsize" type="number" placeholder="frame size" style="width:7em">
-    <button onclick="cmd('test throughput '+v('rsize'))">Throughput</button>
-    <button onclick="cmd('test latency '+v('rsize'))">Latency</button>
-    <button onclick="cmd('test frameloss '+v('rsize'))">Loss</button>
-    <button onclick="cmd('test backtoback '+v('rsize'))">B2B</button>
-    <button class="warn" onclick="cmd('test all')">Full suite</button>
+   <div class="card"><h2>SD Card</h2>
+    <div class="row">
+     <button onclick="cmd('sd')">Info</button>
+     <button onclick="cmd('sd init')">Re-init</button>
+     <button class="stop" onclick="if(confirm('Erase ALL SD data?'))cmd('sd format')">Format</button>
+    </div>
    </div>
   </div>
 
-  <div class="card"><h2>Discovery (LLDP/CDP)</h2>
-   <div class="row">
-    <input id="dsec" type="number" placeholder="secs" value="65" style="width:5em">
-    <button onclick="cmd('discover '+v('dsec'))">Listen</button>
-    <button onclick="cmd('advertise')">Advert config</button>
-    <button onclick="cmd('advertise lldp on')">LLDP on</button>
-    <button onclick="cmd('advertise cdp on')">CDP on</button>
-    <button class="stop" onclick="cmd('advertise off')">Off</button>
+  <!-- L1/L2 TAB -->
+  <div class="tab-content" id="tab-l1l2">
+   <div class="card"><h2>PHY / Link Mode</h2>
+    <div class="row">
+     <select id="phymode" style="flex:2">
+      <option value="auto">Auto-negotiate</option>
+      <option value="100fd">100 Mbps Full-Duplex</option>
+      <option value="100hd">100 Mbps Half-Duplex</option>
+      <option value="10fd">10 Mbps Full-Duplex</option>
+      <option value="10hd">10 Mbps Half-Duplex</option>
+     </select>
+     <button onclick="cmd('link speed '+v('phymode'))">Apply</button>
+    </div>
+   </div>
+   <div class="card"><h2>Traffic</h2>
+    <div class="row">
+     <button onclick="cmd('stats')">Stats</button>
+     <button class="warn" onclick="cmd('stats clear')">Clear</button>
+     <button onclick="cmd('loopback on')">Loop on</button>
+     <button class="stop" onclick="cmd('loopback off')">Loop off</button>
+    </div>
+    <div class="row">
+     <input id="smac" placeholder="source MAC"><button onclick="cmd('mac '+v('smac'))">Set</button>
+    </div>
+    <div class="row">
+     <input id="tmac" placeholder="target MAC"><button onclick="cmd('target '+v('tmac'))">Set</button>
+    </div>
+    <div class="row">
+     <input id="scount" type="number" placeholder="count" value="100" style="width:6em">
+     <input id="ssize" type="number" placeholder="size" value="64" style="width:5em">
+     <button onclick="cmd('send '+v('scount')+' '+v('ssize'))">Send</button>
+    </div>
    </div>
   </div>
 
-  <div class="card"><h2>L3 / IP</h2>
-   <div class="row">
-    <button onclick="cmd('ip show')">Show IP</button>
-    <button onclick="cmd('ip dhcp')">DHCP</button>
-   </div>
-   <div class="row">
-    <input id="sip" placeholder="ip"><input id="smask" placeholder="mask"><input id="sgw" placeholder="gw">
-    <button onclick="cmd('ip static '+v('sip')+' '+v('smask')+' '+v('sgw'))">Static</button>
-   </div>
-  </div>
-
-  <div class="card"><h2>DHCP Tests</h2>
-   <div class="row">
-    <button onclick="cmd('dhcp discover')">DORA</button>
-    <button onclick="cmd('dhcp detect')">Detect</button>
-    <button class="warn" onclick="cmd('dhcp flood 50')">Starve</button>
-    <button class="warn" onclick="cmd('dhcp decline')">Decline</button>
-    <button class="warn" onclick="cmd('dhcp nak')">NAK</button>
-    <button class="warn" onclick="cmd('dhcp malformed')">Malform</button>
-    <button class="warn" onclick="cmd('dhcp renew')">Renew</button>
-   </div>
-  </div>
-
-  <div class="card"><h2>DNS</h2>
-   <div class="row">
-    <input id="dnshost" placeholder="hostname">
-    <input id="dnssrv" placeholder="server (opt)" style="width:8em">
-    <button onclick="cmd('dns resolve '+v('dnshost')+' '+v('dnssrv'))">Resolve</button>
-   </div>
-  </div>
-
-  <div class="card"><h2>mDNS Probe</h2>
-   <div class="row"><input id="host" placeholder="hostname.local">
-    <button onclick="cmd('probe '+v('host'))">Probe</button></div>
-  </div>
-
-  <div class="card"><h2>802.1X / EAP</h2>
-   <div class="row">
-    <select id="d1xmethod" onchange="cmd('dot1x method '+v('d1xmethod'))">
-     <option value="md5">MD5</option><option value="peap">PEAP</option>
-     <option value="ttls-pap">TTLS/PAP</option><option value="ttls-mschap">TTLS/MSCHAPv2</option>
-     <option value="tls">TLS</option>
-    </select>
-    <button onclick="cmd('dot1x probe')">Probe</button>
-    <button onclick="cmd('dot1x auth')">Auth</button>
-    <button class="stop" onclick="cmd('dot1x logoff')">Logoff</button>
-   </div>
-   <div class="row">
-    <input id="d1xuser" placeholder="identity"><button onclick="cmd('dot1x user '+v('d1xuser'))">Set user</button>
-    <input id="d1xpass" type="password" placeholder="password"><button onclick="cmd('dot1x pass '+v('d1xpass'))">Set pass</button>
-   </div>
-   <div class="row">
-    <input type="file" id="caf" accept=".pem,.crt,.cer" style="flex:2">
-    <button onclick="upCert('ca','caf')">CA</button>
-    <input type="file" id="clf" accept=".pem,.crt,.cer" style="flex:2">
-    <button onclick="upCert('client','clf')">Cert</button>
-    <input type="file" id="kyf" accept=".pem,.key" style="flex:2">
-    <button onclick="upCert('key','kyf')">Key</button>
-   </div>
-   <div class="row">
-    <input id="d1xkeypass" type="password" placeholder="key passphrase" style="flex:2">
-    <button onclick="cmd('dot1x keypass '+v('d1xkeypass'))">Save</button>
-    <button class="stop" onclick="if(confirm('Remove all certs?'))cmd('dot1x cert clear all')">Clear all</button>
-   </div>
-   <table id="certst" style="margin:4px 0;font-size:12px"><tr><td>loading...</td></tr></table>
-  </div>
-
-  <div class="card"><h2>Reconnaissance</h2>
-   <div class="row">
-    <input id="rsweepa" placeholder="start IP"><input id="rsweepb" placeholder="end IP">
-    <button onclick="cmd('recon sweep '+v('rsweepa')+' '+v('rsweepb'))">Ping sweep</button>
-    <button onclick="cmd('arp scan '+v('rsweepa')+' '+v('rsweepb'))">ARP scan</button>
-   </div>
-   <div class="row">
-    <input id="rtrace" placeholder="target IP">
-    <button onclick="cmd('recon trace '+v('rtrace'))">Trace</button>
-    <input id="rpsecs" type="number" value="30" style="width:4em">
-    <button onclick="cmd('recon passive '+v('rpsecs'))">Passive</button>
-   </div>
-   <div class="row">
-    <button onclick="cmd('link')">Link</button>
-    <button onclick="cmd('link monitor')">Monitor</button>
-    <button onclick="cmd('wifi scan')">WiFi scan</button>
-    <button onclick="cmd('ipv6 listen')">NDP</button>
-    <button onclick="cmd('fhrp listen')">FHRP</button>
-    <button onclick="cmd('dhcpv6 probe')">DHCPv6</button>
-   </div>
-   <div class="row">
-    <input id="snmpip" placeholder="target IP">
-    <button onclick="cmd('snmp probe '+v('snmpip'))">SNMP probe</button>
+  <!-- INJECTION TAB -->
+  <div class="tab-content" id="tab-inject">
+   <div class="card"><h2>Error Injection</h2>
+    <div class="row">
+     <button onclick="cmd('inject runt')">Runt</button>
+     <button onclick="cmd('inject giant')">Giant</button>
+     <button onclick="cmd('inject jumbo')">Jumbo</button>
+     <button onclick="cmd('inject badtype')">BadType</button>
+    </div>
+    <div class="row">
+     <button onclick="cmd('inject broadcast')">Broadcast</button>
+     <button onclick="cmd('inject multicast')">Multicast</button>
+     <button onclick="cmd('inject pause')">PAUSE</button>
+    </div>
+    <h3>Pattern</h3>
+    <div class="row">
+     <select id="ptype"><option>zeros</option><option>ones</option><option>alt</option><option>incr</option><option>random</option></select>
+     <input id="plen" type="number" placeholder="len" value="64" style="width:5em">
+     <input id="pn" type="number" placeholder="n" value="100" style="width:5em">
+     <button onclick="cmd('inject pattern '+v('ptype')+' '+v('plen')+' '+v('pn'))">Inject</button>
+    </div>
+    <h3>Sustained</h3>
+    <div class="row">
+     <input id="srate" type="number" placeholder="Hz" value="1000" style="width:6em">
+     <button class="warn" onclick="cmd('inject storm '+v('srate'))">Storm</button>
+    </div>
+    <div class="row">
+     <select id="ctype"><option>giant</option><option>jumbo</option><option>badtype</option><option>broadcast</option><option>multicast</option><option>pause</option><option>pattern</option></select>
+     <input id="crate" type="number" placeholder="fps" value="1000" style="width:5em">
+     <button class="warn" onclick="cmd('inject continuous '+v('ctype')+' '+v('crate'))">Continuous</button>
+    </div>
+    <div class="row"><button class="stop" onclick="cmd('inject stop')">Stop all injection</button></div>
    </div>
   </div>
 
-  <div class="card"><h2>PCAP Capture</h2>
-   <div class="row">
-    <input id="pcsecs" type="number" value="10" style="width:5em" title="seconds">
-    <input id="pcmax" type="number" placeholder="max frames" style="width:7em">
-    <button onclick="cmd('pcap start '+v('pcsecs')+' '+(v('pcmax')||'0'))">Capture</button>
-    <button onclick="cmd('pcap status')">Status</button>
-    <a href="/capture.pcap"><button type="button">Download</button></a>
-    <button class="stop" onclick="cmd('pcap delete')">Delete</button>
+  <!-- TESTS TAB -->
+  <div class="tab-content" id="tab-test">
+   <div class="card"><h2>RFC 2544 (DUT loopback required)</h2>
+    <div class="row">
+     <input id="rsize" type="number" placeholder="frame size (blank=all)" style="width:8em">
+    </div>
+    <div class="row">
+     <button onclick="cmd('test throughput '+v('rsize'))">Throughput</button>
+     <button onclick="cmd('test latency '+v('rsize'))">Latency</button>
+     <button onclick="cmd('test frameloss '+v('rsize'))">Frame Loss</button>
+     <button onclick="cmd('test backtoback '+v('rsize'))">Back-to-Back</button>
+    </div>
+    <div class="row"><button class="warn" onclick="cmd('test all')">Full RFC 2544 Suite</button></div>
+   </div>
+   <div class="card"><h2>DHCP Tests</h2>
+    <div class="row">
+     <button onclick="cmd('dhcp discover')">DORA</button>
+     <button onclick="cmd('dhcp detect')">Detect</button>
+     <button class="warn" onclick="cmd('dhcp flood 50')">Starve</button>
+    </div>
+    <div class="row">
+     <button class="warn" onclick="cmd('dhcp decline')">Decline</button>
+     <button class="warn" onclick="cmd('dhcp nak')">NAK</button>
+     <button class="warn" onclick="cmd('dhcp malformed')">Malform</button>
+     <button class="warn" onclick="cmd('dhcp renew')">Renew</button>
+    </div>
+   </div>
+   <div class="card"><h2>DNS</h2>
+    <div class="row">
+     <input id="dnshost" placeholder="hostname">
+     <input id="dnssrv" placeholder="server (opt)" style="width:8em">
+     <button onclick="cmd('dns resolve '+v('dnshost')+' '+v('dnssrv'))">Resolve</button>
+    </div>
+    <div class="row">
+     <input id="host" placeholder="hostname.local">
+     <button onclick="cmd('probe '+v('host'))">mDNS Probe</button>
+    </div>
+   </div>
+   <div class="card" id="offensiveCard" style="display:none">
+    <h2>Offensive <span id="offBadge" class="bad" style="font-size:11px">(ARMED)</span></h2>
+    <h3>L2 Attacks</h3>
+    <div class="row">
+     <input id="vlvid" type="number" placeholder="VLAN" style="width:5em">
+     <button class="warn" onclick="cmd('l2 vlan '+v('vlvid'))">VLAN</button>
+     <input id="vldn" type="number" placeholder="native" style="width:5em">
+     <input id="vldt" type="number" placeholder="target" style="width:5em">
+     <button class="warn" onclick="cmd('l2 dtag '+v('vldn')+' '+v('vldt'))">Q-in-Q</button>
+    </div>
+    <div class="row">
+     <button class="warn" onclick="cmd('l2 dtp')">DTP</button>
+     <button class="warn" onclick="cmd('l2 macflood')">MAC flood</button>
+     <button class="warn" onclick="cmd('l2 stp root')">STP root</button>
+     <button class="warn" onclick="cmd('l2 lldpflood')">LLDP flood</button>
+    </div>
+    <h3>ARP / DHCP / IPv6 / DNS</h3>
+    <div class="row">
+     <input id="aspv" placeholder="victim"><input id="aspg" placeholder="gateway">
+     <button class="warn" onclick="cmd('arp spoof '+v('aspv')+' '+v('aspg'))">ARP MITM</button>
+    </div>
+    <div class="row">
+     <input id="dhrp" placeholder="pool IP">
+     <button class="warn" onclick="cmd('dhcp rogue '+v('dhrp'))">Rogue DHCP</button>
+     <button class="warn" onclick="cmd('ipv6 rogue')">Rogue RA</button>
+    </div>
+    <div class="row">
+     <input id="dnsspoofip" placeholder="spoof IP">
+     <button class="warn" onclick="cmd('dns spoof '+v('dnsspoofip'))">DNS spoof</button>
+    </div>
+    <div class="row">
+     <input id="fhrpgrp" type="number" placeholder="grp" style="width:4em">
+     <input id="fhrpvip" placeholder="virtual IP">
+     <button class="warn" onclick="cmd('fhrp hsrp '+v('fhrpgrp')+' '+v('fhrpvip'))">HSRP</button>
+     <button class="warn" onclick="cmd('fhrp vrrp '+v('fhrpgrp')+' '+v('fhrpvip'))">VRRP</button>
+    </div>
+    <h3>802.1X Attacks</h3>
+    <div class="row">
+     <button class="warn" onclick="cmd('dot1x startflood')">EAPOL flood</button>
+     <input id="lofmac" placeholder="victim MAC">
+     <button class="warn" onclick="cmd('dot1x logoffmac '+v('lofmac'))">Spoof Logoff</button>
+     <button class="warn" onclick="cmd('dot1x rogue')">Rogue Auth</button>
+    </div>
    </div>
   </div>
 
-  <div class="card"><h2>SD Card</h2>
-   <div class="row">
-    <button onclick="cmd('sd')">Info</button>
-    <button onclick="cmd('sd init')">Re-init</button>
-    <button class="stop" onclick="if(confirm('Erase ALL data on SD card?'))cmd('sd format')">Format</button>
+  <!-- RECON TAB -->
+  <div class="tab-content" id="tab-recon">
+   <div class="card"><h2>IP Configuration</h2>
+    <div class="row">
+     <button onclick="cmd('ip show')">Show</button>
+     <button onclick="cmd('ip dhcp')">DHCP</button>
+    </div>
+    <div class="row">
+     <input id="sip" placeholder="IP"><input id="smask" placeholder="mask"><input id="sgw" placeholder="gateway">
+     <button onclick="cmd('ip static '+v('sip')+' '+v('smask')+' '+v('sgw'))">Static</button>
+    </div>
+   </div>
+   <div class="card"><h2>Discovery (LLDP/CDP)</h2>
+    <div class="row">
+     <input id="dsec" type="number" placeholder="secs" value="65" style="width:5em">
+     <button onclick="cmd('discover '+v('dsec'))">Listen</button>
+     <button onclick="cmd('advertise lldp on')">LLDP on</button>
+     <button onclick="cmd('advertise cdp on')">CDP on</button>
+     <button class="stop" onclick="cmd('advertise off')">Off</button>
+    </div>
+   </div>
+   <div class="card"><h2>Network Scan</h2>
+    <div class="row">
+     <input id="rsweepa" placeholder="start IP"><input id="rsweepb" placeholder="end IP">
+    </div>
+    <div class="row">
+     <button onclick="cmd('recon sweep '+v('rsweepa')+' '+v('rsweepb'))">Ping sweep</button>
+     <button onclick="cmd('arp scan '+v('rsweepa')+' '+v('rsweepb'))">ARP scan</button>
+    </div>
+    <div class="row">
+     <input id="rtrace" placeholder="target IP">
+     <button onclick="cmd('recon trace '+v('rtrace'))">Traceroute</button>
+     <input id="rpsecs" type="number" value="30" style="width:5em">
+     <button onclick="cmd('recon passive '+v('rpsecs'))">Passive</button>
+    </div>
+   </div>
+   <div class="card"><h2>Port Scanner</h2>
+    <div class="row">
+     <input id="scnip" placeholder="target IP">
+     <button onclick="cmd('scan common '+v('scnip'))">Common ports</button>
+    </div>
+    <div class="row">
+     <input id="scnp1" type="number" placeholder="first" style="width:5em">
+     <input id="scnp2" type="number" placeholder="last" style="width:5em">
+     <button onclick="cmd('scan ports '+v('scnip')+' '+v('scnp1')+' '+v('scnp2'))">Range</button>
+    </div>
+    <div class="row">
+     <input id="scnbp" type="number" placeholder="port" style="width:5em">
+     <button onclick="cmd('scan banner '+v('scnip')+' '+v('scnbp'))">Banner</button>
+    </div>
+   </div>
+   <div class="card"><h2>Protocol Listeners</h2>
+    <div class="row">
+     <button onclick="cmd('link')">Link Info</button>
+     <button onclick="cmd('link monitor')">Monitor</button>
+     <button onclick="cmd('wifi scan')">WiFi scan</button>
+    </div>
+    <div class="row">
+     <button onclick="cmd('ipv6 listen')">IPv6 NDP</button>
+     <button onclick="cmd('fhrp listen')">FHRP</button>
+     <button onclick="cmd('dhcpv6 probe')">DHCPv6</button>
+    </div>
+    <div class="row">
+     <input id="snmpip" placeholder="target IP">
+     <button onclick="cmd('snmp probe '+v('snmpip'))">SNMP</button>
+     <input id="snmprange" placeholder="end IP" style="width:8em">
+     <button onclick="cmd('snmp sweep '+v('snmpip')+' '+v('snmprange'))">Sweep</button>
+    </div>
    </div>
   </div>
 
-  <div class="card"><h2>Port Scanner</h2>
-   <div class="row">
-    <input id="scnip" placeholder="target IP">
-    <button onclick="cmd('scan common '+v('scnip'))">Common</button>
-   </div>
-   <div class="row">
-    <input id="scnp1" type="number" placeholder="first" style="width:5em">
-    <input id="scnp2" type="number" placeholder="last" style="width:5em">
-    <button onclick="cmd('scan ports '+v('scnip')+' '+v('scnp1')+' '+v('scnp2'))">Range</button>
-    <input id="scnbp" type="number" placeholder="port" style="width:5em">
-    <button onclick="cmd('scan banner '+v('scnip')+' '+v('scnbp'))">Banner</button>
-   </div>
-  </div>
-
-  <div class="card"><h2>Offensive (arm required)</h2>
-   <div class="row">
-    <button class="warn" onclick="if(confirm('Enable offensive tests?'))cmd('arm on')">Arm</button>
-    <button class="stop" onclick="cmd('disarm')">Disarm</button>
-    <button onclick="cmd('arm')">Status</button>
-   </div>
-   <h3>L2 Attacks</h3>
-   <div class="row">
-    <input id="vlvid" type="number" placeholder="VLAN" style="width:5em">
-    <button class="warn" onclick="cmd('l2 vlan '+v('vlvid'))">VLAN</button>
-    <input id="vldn" type="number" placeholder="native" style="width:5em">
-    <input id="vldt" type="number" placeholder="target" style="width:5em">
-    <button class="warn" onclick="cmd('l2 dtag '+v('vldn')+' '+v('vldt'))">Q-in-Q</button>
-   </div>
-   <div class="row">
-    <button class="warn" onclick="cmd('l2 dtp')">DTP</button>
-    <button class="warn" onclick="cmd('l2 macflood')">MAC flood</button>
-    <button class="warn" onclick="cmd('l2 stp root')">STP root</button>
-    <button class="warn" onclick="cmd('l2 lldpflood')">LLDP flood</button>
-    <button class="warn" onclick="cmd('l2 cdpflood')">CDP flood</button>
-   </div>
-   <h3>ARP</h3>
-   <div class="row">
-    <input id="aspv" placeholder="victim"><input id="aspg" placeholder="gateway">
-    <button class="warn" onclick="cmd('arp spoof '+v('aspv')+' '+v('aspg'))">MITM</button>
-    <button class="warn" onclick="cmd('arp storm')">Storm</button>
-   </div>
-   <h3>DHCP / IPv6 / DNS / FHRP</h3>
-   <div class="row">
-    <input id="dhrp" placeholder="pool IP">
-    <button class="warn" onclick="cmd('dhcp rogue '+v('dhrp'))">Rogue DHCP</button>
-    <button class="warn" onclick="cmd('ipv6 rogue')">Rogue RA</button>
-   </div>
-   <div class="row">
-    <input id="dnsspoofip" placeholder="spoof IP">
-    <button class="warn" onclick="cmd('dns spoof '+v('dnsspoofip'))">DNS spoof</button>
-    <button class="warn" onclick="cmd('dhcpv6 rogue 2001:db8:1::1 2001:db8:1::53')">DHCPv6 rogue</button>
-   </div>
-   <div class="row">
-    <input id="fhrpgrp" type="number" placeholder="group" style="width:4em">
-    <input id="fhrpvip" placeholder="virtual IP">
-    <button class="warn" onclick="cmd('fhrp hsrp '+v('fhrpgrp')+' '+v('fhrpvip'))">HSRP hijack</button>
-    <button class="warn" onclick="cmd('fhrp vrrp '+v('fhrpgrp')+' '+v('fhrpvip'))">VRRP hijack</button>
-   </div>
-   <h3>802.1X Attacks</h3>
-   <div class="row">
-    <button class="warn" onclick="cmd('dot1x startflood')">EAPOL flood</button>
-    <input id="lofmac" placeholder="victim MAC" style="flex:2">
-    <button class="warn" onclick="cmd('dot1x logoffmac '+v('lofmac'))">Spoof Logoff</button>
-    <button class="warn" onclick="cmd('dot1x rogue')">Rogue Auth</button>
+  <!-- SECURITY TAB -->
+  <div class="tab-content" id="tab-security">
+   <div class="card"><h2>802.1X / EAP</h2>
+    <div class="row">
+     <select id="d1xmethod" onchange="cmd('dot1x method '+v('d1xmethod'))">
+      <option value="md5">MD5</option><option value="peap">PEAP</option>
+      <option value="ttls-pap">TTLS/PAP</option><option value="ttls-mschap">TTLS/MSCHAPv2</option>
+      <option value="tls">TLS</option>
+     </select>
+     <button onclick="cmd('dot1x probe')">Probe</button>
+     <button onclick="cmd('dot1x auth')">Auth</button>
+     <button class="stop" onclick="cmd('dot1x logoff')">Logoff</button>
+    </div>
+    <div class="row">
+     <input id="d1xuser" placeholder="identity"><button onclick="cmd('dot1x user '+v('d1xuser'))">Set</button>
+    </div>
+    <div class="row">
+     <input id="d1xpass" type="password" placeholder="password"><button onclick="cmd('dot1x pass '+v('d1xpass'))">Set</button>
+    </div>
+    <h3>Certificates</h3>
+    <div class="row">
+     <input type="file" id="caf" accept=".pem,.crt"><button onclick="upCert('ca','caf')">CA</button>
+     <input type="file" id="clf" accept=".pem,.crt"><button onclick="upCert('client','clf')">Cert</button>
+    </div>
+    <div class="row">
+     <input type="file" id="kyf" accept=".pem,.key"><button onclick="upCert('key','kyf')">Key</button>
+     <button class="stop" onclick="if(confirm('Clear all certs?'))cmd('dot1x cert clear all')">Clear</button>
+    </div>
+    <table id="certst" style="font-size:12px"><tr><td>loading...</td></tr></table>
    </div>
   </div>
 
-  <div class="card"><h2>Wi-Fi Config (reboot to apply)</h2>
-   <label style="font-size:12px"><input id="wen" type="checkbox" style="width:auto"> Wi-Fi enabled</label>
-   <select id="wmode" onchange="modeUi()" style="margin:4px 0">
-    <option value="sta">Station (join network)</option><option value="ap">Access Point</option>
-   </select>
-   <div id="stacfg">
-    <div class="row"><input id="ssid" placeholder="SSID"><input id="pass" type="password" placeholder="password"></div>
+
+  <!-- FILES TAB -->
+  <div class="tab-content" id="tab-files">
+   <div class="card"><h2>PCAP Capture</h2>
+    <div class="row">
+     <input id="pcsecs" type="number" value="10" style="width:5em" placeholder="secs">
+     <input id="pcmax" type="number" placeholder="max frames" style="width:7em">
+     <button onclick="cmd('pcap start '+v('pcsecs')+' '+(v('pcmax')||'0'))">Capture</button>
+    </div>
+    <div class="row">
+     <button onclick="cmd('pcap status')">Status</button>
+     <a href="/capture.pcap"><button type="button">Download .pcap</button></a>
+     <button class="stop" onclick="cmd('pcap delete')">Delete</button>
+    </div>
    </div>
-   <div id="apcfg" style="display:none">
-    <div class="row"><input id="apssid" placeholder="AP SSID"><input id="appass" type="password" placeholder="AP password"></div>
+   <div class="card"><h2>SD Card File Browser</h2>
+    <div class="row">
+     <input id="fpath" placeholder="path" value="/">
+     <button onclick="cmd('sd ls '+v('fpath'))">List</button>
+     <button onclick="cmd('sd cat '+v('fpath'))">View</button>
+    </div>
+    <div class="row">
+     <input id="frm" placeholder="file to delete">
+     <button class="stop" onclick="cmd('sd rm '+v('frm'))">Delete</button>
+    </div>
+    <div class="row">
+     <input id="fren1" placeholder="old path" style="flex:1">
+     <input id="fren2" placeholder="new path" style="flex:1">
+     <button onclick="cmd('sd rename '+v('fren1')+' '+v('fren2'))">Rename</button>
+    </div>
+    <div class="row">
+     <input id="fmkd" placeholder="directory path">
+     <button onclick="cmd('sd mkdir '+v('fmkd'))">Mkdir</button>
+    </div>
    </div>
-   <div class="row"><input id="hn" placeholder="hostname"><button onclick="saveCfg()">Save</button></div>
+   <div class="card"><h2>Logs</h2>
+    <div class="row">
+     <button onclick="cmd('log')">Status</button>
+     <input id="logname" placeholder="log name (optional)">
+     <button onclick="cmd('log start '+v('logname'))">Start</button>
+     <button class="stop" onclick="cmd('log stop')">Stop</button>
+    </div>
+    <div class="row">
+     <button onclick="cmd('log list')">List logs</button>
+     <input id="logdel" placeholder="filename to delete">
+     <button class="stop" onclick="cmd('log delete '+v('logdel'))">Delete</button>
+    </div>
+   </div>
   </div>
 
-  <div class="card"><h2>WireGuard VPN</h2>
-   <div class="row">
-    <button onclick="cmd('wg')">Status</button>
-    <button onclick="cmd('wg start')">Start</button>
-    <button class="stop" onclick="cmd('wg stop')">Stop</button>
+  <!-- SCRIPTS TAB -->
+  <div class="tab-content" id="tab-scripts">
+   <div class="card"><h2>Script Engine</h2>
+    <div class="row">
+     <button onclick="cmd('script')">Status</button>
+     <button onclick="cmd('script list')">List scripts</button>
+     <button class="stop" onclick="cmd('script stop')">Stop</button>
+    </div>
+    <h3>Run Script</h3>
+    <div class="row">
+     <input id="scrfile" placeholder="filename (in /scripts/)">
+     <input id="scrlog" placeholder="log name (opt)" style="width:8em">
+     <button onclick="cmd('script run '+v('scrfile')+' '+v('scrlog'))">Run</button>
+    </div>
+    <h3>Create Script</h3>
+    <div class="row">
+     <input id="scrnew" placeholder="new_script.txt">
+     <button onclick="cmd('script create '+v('scrnew'))">Create template</button>
+    </div>
+    <h3>Quick Script (run inline)</h3>
+    <textarea id="scrtext" placeholder="# One command per line&#10;echo Hello&#10;status&#10;delay 1000&#10;discover 10"></textarea>
+    <div class="row">
+     <button onclick="cmdInlineScript()">Run inline</button>
+    </div>
    </div>
-   <div class="row">
-    <input id="wgip" placeholder="tunnel IP (e.g. 10.0.0.2)">
-    <button onclick="cmd('wg set localip '+v('wgip'))">Set</button>
+   <div class="card"><h2>Cron Scheduler</h2>
+    <div class="row">
+     <button onclick="cmd('cron')">List</button>
+     <button onclick="cmd('cron reload')">Reload</button>
+     <button class="stop" onclick="if(confirm('Clear all cron entries?'))cmd('cron clear')">Clear</button>
+    </div>
+    <h3>Add Entry</h3>
+    <div class="row">
+     <input id="cronmin" placeholder="min" value="*" style="width:3em">
+     <input id="cronhr" placeholder="hr" value="*" style="width:3em">
+     <input id="crondom" placeholder="dom" value="*" style="width:3em">
+     <input id="cronmon" placeholder="mon" value="*" style="width:3em">
+     <input id="crondow" placeholder="dow" value="*" style="width:3em">
+    </div>
+    <div class="row">
+     <input id="croncmd" placeholder="command or /scripts/file.txt">
+     <button onclick="cmd('cron add '+v('cronmin')+' '+v('cronhr')+' '+v('crondom')+' '+v('cronmon')+' '+v('crondow')+' '+v('croncmd'))">Add</button>
+    </div>
+    <div class="row">
+     <input id="cronrm" type="number" placeholder="index #" style="width:5em">
+     <button class="stop" onclick="cmd('cron remove '+v('cronrm'))">Remove</button>
+    </div>
    </div>
-   <div class="row">
-    <input id="wgep" placeholder="endpoint host/IP">
-    <input id="wgport" type="number" placeholder="port" value="51820" style="width:6em">
-    <button onclick="cmd('wg set endpoint '+v('wgep'));cmd('wg set port '+v('wgport'))">Set</button>
+   <div class="card"><h2>Script Language Reference</h2>
+    <details><summary style="cursor:pointer;color:var(--dim);font-size:12px">Show directives</summary>
+    <pre style="font-size:11px;margin-top:6px;max-height:200px"># Comment
+delay 500            Pause N milliseconds
+wait 2               Pause N seconds
+echo message         Print message
+set VAR value        Set variable ($VAR to use)
+log start [name]     Start output logging
+log stop             Stop logging
+if_time HH:MM-HH:MM Skip if outside window
+if_day MON,TUE,...   Skip if not matching day
+repeat N             Repeat block N times
+end_repeat           End repeat block
+upload log name url  Upload log file
+upload pcap url      Upload pcap
+rm /path/file        Delete SD file
+rename old new       Rename SD file
+mkdir /path          Create directory
+write_file path text Append to file
+abort                Stop script
+(any other line)     Run as CLI command</pre>
+    </details>
    </div>
-   <div class="row">
-    <input id="wgpriv" type="password" placeholder="private key (base64)">
-    <button onclick="cmd('wg set privkey '+v('wgpriv'))">Set</button>
-   </div>
-   <div class="row">
-    <input id="wgpub" placeholder="peer public key (base64)">
-    <button onclick="cmd('wg set pubkey '+v('wgpub'))">Set</button>
-   </div>
-   <div class="row">
-    <input id="wgpsk" type="password" placeholder="pre-shared key (optional)">
-    <button onclick="cmd('wg set psk '+v('wgpsk'))">Set</button>
-   </div>
-   <div class="row">
-    <button onclick="cmd('wg enable')">Enable (auto-start)</button>
-    <button class="stop" onclick="cmd('wg disable')">Disable</button>
-    <button class="stop" onclick="if(confirm('Erase all WireGuard config?'))cmd('wg clear')">Clear</button>
-   </div>
+  </div>
+
+ </div>
+</div>
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal" onclick="if(event.target===this)closeSettings()">
+ <div class="modal">
+  <button class="modal-close" onclick="closeSettings()">&#10005;</button>
+  <h2 style="margin-top:0">System</h2>
+  <div class="row">
+   <button onclick="cmd('status')">Full status</button>
+   <button onclick="cmd('help')">CLI help</button>
+   <button class="stop" onclick="reboot()">Reboot</button>
+  </div>
+  <h2>Offensive Mode</h2>
+  <div class="row">
+   <button class="warn" onclick="armDevice()">Arm</button>
+   <button class="stop" onclick="disarmDevice()">Disarm</button>
+   <span id="armStatus" style="font-size:12px;color:var(--dim);padding:6px">--</span>
+  </div>
+  <h2>Wi-Fi (reboot to apply)</h2>
+  <label style="font-size:12px"><input id="wen" type="checkbox" style="width:auto"> Wi-Fi enabled</label>
+  <select id="wmode" onchange="modeUi()" style="margin:4px 0">
+   <option value="sta">Station (join network)</option><option value="ap">Access Point</option>
+  </select>
+  <div id="stacfg">
+   <div class="row"><input id="ssid" placeholder="SSID"><input id="pass" type="password" placeholder="password"></div>
+  </div>
+  <div id="apcfg" style="display:none">
+   <div class="row"><input id="apssid" placeholder="AP SSID"><input id="appass" type="password" placeholder="AP password"></div>
+  </div>
+  <div class="row"><input id="hn" placeholder="hostname"><button onclick="saveCfg()">Save</button></div>
+  <h2>Web Server</h2>
+  <div class="row">
+   <button onclick="cmd('web')">Status</button>
+   <button onclick="cmd('web on')">Start</button>
+   <button class="stop" onclick="cmd('web off')">Stop</button>
+  </div>
+  <div class="row">
+   <button onclick="cmd('web https on')">HTTPS On</button>
+   <button class="stop" onclick="cmd('web https off')">HTTPS Off</button>
+  </div>
+  <h2>Web Authentication</h2>
+  <div class="row">
+   <input id="wauser" placeholder="username">
+   <input id="wapass" type="password" placeholder="password">
+   <button onclick="cmd('web auth set '+v('wauser')+' '+v('wapass'))">Set</button>
+  </div>
+  <div class="row">
+   <button class="stop" onclick="cmd('web auth clear')">Clear auth</button>
+  </div>
+  <h2>WireGuard VPN</h2>
+  <div class="row">
+   <button onclick="cmd('wg')">Status</button>
+   <button onclick="cmd('wg start')">Start</button>
+   <button class="stop" onclick="cmd('wg stop')">Stop</button>
+  </div>
+  <div class="row">
+   <input id="wgip" placeholder="tunnel IP (10.0.0.2)">
+   <button onclick="cmd('wg set localip '+v('wgip'))">Set</button>
+  </div>
+  <div class="row">
+   <input id="wgep" placeholder="endpoint host/IP">
+   <input id="wgport" type="number" placeholder="port" value="51820" style="width:6em">
+   <button onclick="cmd('wg set endpoint '+v('wgep'));cmd('wg set port '+v('wgport'))">Set</button>
+  </div>
+  <div class="row">
+   <input id="wgpriv" type="password" placeholder="private key (base64)">
+   <button onclick="cmd('wg set privkey '+v('wgpriv'))">Set</button>
+  </div>
+  <div class="row">
+   <input id="wgpub" placeholder="peer public key (base64)">
+   <button onclick="cmd('wg set pubkey '+v('wgpub'))">Set</button>
+  </div>
+  <div class="row">
+   <input id="wgpsk" type="password" placeholder="pre-shared key (optional)">
+   <button onclick="cmd('wg set psk '+v('wgpsk'))">Set</button>
+  </div>
+  <div class="row">
+   <button onclick="cmd('wg enable')">Enable</button>
+   <button class="stop" onclick="cmd('wg disable')">Disable</button>
+   <button class="stop" onclick="if(confirm('Erase WG config?'))cmd('wg clear')">Clear</button>
+  </div>
+  <div class="row">
+   <button onclick="cmd('wg set weboff on')">Web off when VPN</button>
+   <button class="stop" onclick="cmd('wg set weboff off')">Keep web on</button>
+  </div>
+  <h2>Upload Destination</h2>
+  <div class="row">
+   <button onclick="cmd('upload')">Show config</button>
+  </div>
+  <div class="row">
+   <input id="upurl" placeholder="https://server/upload">
+   <input id="upuser" placeholder="user" style="width:5em">
+   <input id="uppass" type="password" placeholder="pass" style="width:5em">
+   <button onclick="cmd('upload set '+v('upurl')+' '+v('upuser')+' '+v('uppass'))">Save</button>
+  </div>
+  <div class="row">
+   <input id="uplf" placeholder="log filename">
+   <button onclick="cmd('upload log '+v('uplf'))">Upload log</button>
+   <button onclick="cmd('upload pcap')">Upload pcap</button>
   </div>
  </div>
 </div>
 <script>
 function v(i){return document.getElementById(i).value}
-let polling=false,isMobile=window.innerWidth<900;
+let polling=false, armed=false;
+function openSettings(){document.getElementById('settingsModal').classList.add('show');}
+function closeSettings(){document.getElementById('settingsModal').classList.remove('show');}
+function armDevice(){
+ if(!confirm('Enable offensive mode? For authorized lab use only.'))return;
+ cmd('arm on');armed=true;updateArmUi();
+}
+function disarmDevice(){cmd('disarm');armed=false;updateArmUi();}
+function updateArmUi(){
+ document.getElementById('offensiveCard').style.display=armed?'block':'none';
+ document.getElementById('armStatus').textContent=armed?'ARMED':'disarmed';
+ document.getElementById('armStatus').style.color=armed?'var(--bad)':'var(--dim)';
+}
+function showTab(name){
+ document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+ document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+ document.getElementById('tab-'+name).classList.add('active');
+ document.querySelector('[onclick="showTab(\''+name+'\')"]').classList.add('active');
+ localStorage.setItem('lastTab',name);
+}
 function detectLayout(){
  let force=localStorage.getItem('forceDesktop');
  if(force==='1'){document.body.className='desktop force-desktop';document.getElementById('layoutToggle').textContent='Mobile';return;}
@@ -433,6 +666,22 @@ function cmd(c){
  .then(r=>{if(r.status==409)return r.text().then(t=>{document.getElementById('run').innerHTML='<span class="bad">'+t+'</span>';});
   document.getElementById('log').textContent='running: '+c+' ...';setRun(true);
   if(!polling){polling=true;setTimeout(poll,300);}});}
+function cmdInlineScript(){
+ let text=document.getElementById('scrtext').value;
+ let lines=text.split('\n');
+ // Chain commands with delays between
+ let i=0;
+ function next(){
+  if(i>=lines.length)return;
+  let l=lines[i++].trim();
+  if(!l||l.startsWith('#')){next();return;}
+  cmd(l);
+  // Wait for completion then next
+  let check=()=>{if(polling)setTimeout(check,500);else{setTimeout(next,200);}};
+  setTimeout(check,500);
+ }
+ next();
+}
 function saveCfg(){let b='ssid='+encodeURIComponent(v('ssid'))+'&pass='+encodeURIComponent(v('pass'))
  +'&host='+encodeURIComponent(v('hn'))+'&wifi='+(document.getElementById('wen').checked?'1':'0')
  +'&apmode='+(v('wmode')=='ap'?'1':'0')
@@ -443,9 +692,8 @@ function modeUi(){let ap=v('wmode')=='ap';
  document.getElementById('stacfg').style.display=ap?'none':'block';
  document.getElementById('apcfg').style.display=ap?'block':'none';}
 function reboot(){if(!confirm('Reboot the device now?'))return;
- document.getElementById('log').textContent='Rebooting... reconnect in a few seconds.';cmd('reboot');}
+ document.getElementById('log').textContent='Rebooting...';cmd('reboot');}
 function refresh(){fetch('/api/status').then(r=>r.json()).then(s=>{
- // Header stats bar
  let link=s.link||'--',spd=(s.speed||'--')+' '+(s.duplex||'');
  document.getElementById('hsLink').innerHTML='Link: <b class="'+(link=='UP'?'ok':'bad')+'">'+link+'</b> '+spd;
  document.getElementById('hsMgmt').textContent='Mgmt: '+location.hostname;
@@ -457,7 +705,6 @@ function refresh(){fetch('/api/status').then(r=>r.json()).then(s=>{
  let up=s.uptime_s||0,um=Math.floor(up/60),uh=Math.floor(um/60);
  document.getElementById('hsUp').textContent='Up: '+(uh?uh+'h ':'')+(um%60)+'m';
  document.getElementById('hsVer').textContent='v'+s.version;
- // Status table
  const labels={link:'Link',speed:'Speed',duplex:'Duplex',mac:'MAC',ip:'Eth IP',mask:'Mask',gateway:'Gateway',
   tx_frames:'TX frames',rx_frames:'RX frames',tx_errors:'TX errors',rx_dropped:'RX dropped',
   storm:'Storm',continuous:'Continuous',heap_free:'Heap free',heap_min:'Heap min',
@@ -493,6 +740,8 @@ function upCert(kind,inp){let f=document.getElementById(inp).files[0];
  fetch('/api/cert/'+kind,{method:'POST',body:fd})
   .then(r=>r.text()).then(t=>{document.getElementById('log').textContent=t;refreshCerts();})
   .catch(e=>{document.getElementById('log').textContent='Upload failed: '+e;});}
+// Restore last tab
+let lt=localStorage.getItem('lastTab');if(lt)showTab(lt);
 detectLayout();window.addEventListener('resize',()=>{if(!document.body.classList.contains('force-desktop'))detectLayout();});
 setAuto();refresh();loadCfg();refreshCerts();
 </script></body></html>

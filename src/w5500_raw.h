@@ -95,6 +95,9 @@ public:
     // Returns raw PHYCFGR register value.
     uint8_t phyCfgr();
 
+    // Set PHY mode: 0=auto, 1=100FD, 2=100HD, 3=10FD, 4=10HD
+    void setPhyMode(uint8_t mode);
+
     // Send one raw Ethernet frame (without FCS; W5500 appends FCS).
     // len: frame length in bytes (ETH_HDR_LEN .. ETH_GIANT_LEN).
     // Returns true on success.

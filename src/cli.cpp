@@ -175,6 +175,27 @@ void CLI::_dispatch(char *line)
         char *a1 = strtok(nullptr, " \t");
         if (op && strcasecmp(op, "monitor") == 0)
             linkMonitor(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 30);
+        else if (op && strcasecmp(op, "speed") == 0) {
+            if (!a1) {
+                uint8_t phy = _eth.phyCfgr();
+                Serial.printf("Current: %s %s (PHY=0x%02X)\r\n",
+                    (phy & PHYCFGR_SPD) ? "100M" : "10M",
+                    (phy & PHYCFGR_DPX) ? "Full" : "Half", phy);
+                Serial.println("Usage: link speed auto|100fd|100hd|10fd|10hd");
+            } else if (strcasecmp(a1, "auto") == 0) {
+                _eth.setPhyMode(0); Serial.println("PHY: auto-negotiate");
+            } else if (strcasecmp(a1, "100fd") == 0) {
+                _eth.setPhyMode(1); Serial.println("PHY: 100 Mbps Full-Duplex");
+            } else if (strcasecmp(a1, "100hd") == 0) {
+                _eth.setPhyMode(2); Serial.println("PHY: 100 Mbps Half-Duplex");
+            } else if (strcasecmp(a1, "10fd") == 0) {
+                _eth.setPhyMode(3); Serial.println("PHY: 10 Mbps Full-Duplex");
+            } else if (strcasecmp(a1, "10hd") == 0) {
+                _eth.setPhyMode(4); Serial.println("PHY: 10 Mbps Half-Duplex");
+            } else {
+                Serial.println("Options: auto, 100fd, 100hd, 10fd, 10hd");
+            }
+        }
         else
             linkInfo(_eth);
     }
@@ -282,6 +303,7 @@ void CLI::_cmdHelp()
         "  scan ports <ip> <first> <last>   TCP SYN scan of a port range\r\n"
         "  scan banner <ip> <port> [probe]  Banner grab via full TCP handshake\r\n"
         "  link [monitor [secs]]            Link speed/duplex info or flap monitor\r\n"
+        "  link speed auto|100fd|100hd|10fd|10hd  Force PHY speed/duplex\r\n"
         "  wifi scan                        Scan Wi-Fi (rogue-AP / evil-twin recon)\r\n"
         "  ipv6 listen [secs]               Decode IPv6 NDP (RS/RA/NS/NA)\r\n"
         "  fhrp listen [secs]               Decode HSRP/VRRP advertisements\r\n"
@@ -318,10 +340,16 @@ void CLI::_cmdHelp()
         "  dot1x mab [secs]                 MAB / 802.1X enforcement probe\r\n"
         "  dot1x rogue [secs] [md5]         Rogue authenticator (harvest credentials)\r\n"
         "\r\n"
-        "SD Card:\r\n"
+        "SD Card / File Manager:\r\n"
         "  sd                               Show TF/SD card info\r\n"
         "  sd init                          Re-detect / remount the SD card\r\n"
         "  sd format                        Erase and format SD card (FAT32)\r\n"
+        "  sd ls [path]                     List directory contents\r\n"
+        "  sd cat <file>                    Print file contents\r\n"
+        "  sd rm <file>                     Delete a file\r\n"
+        "  sd rename <old> <new>            Rename / move a file\r\n"
+        "  sd mkdir <path>                  Create a directory\r\n"
+        "  sd write <file> <text>           Append a line of text to a file\r\n"
         "\r\n"
         "WireGuard VPN:\r\n"
         "  wg                               Show tunnel status and config\r\n"
@@ -892,6 +920,7 @@ void CLI::_cmdProbe(char *args)
         Serial.println("Usage: probe <hostname>");
         return;
     }
+    if (!_requireIp()) return;
     char *name = strtok(args, " \t");
     probeHostname(_ip, name, 4);
 }
@@ -1266,6 +1295,13 @@ bool CLI::_requireArmed()
     return false;
 }
 
+bool CLI::_requireIp()
+{
+    if (_ip.ip() != 0) return true;
+    Serial.println("No IP address configured. Run 'ip dhcp' or 'ip static <ip> <mask> <gw>' first.");
+    return false;
+}
+
 // =============================================================================
 // l2 -- Layer-2 switch assessment / attacks
 // =============================================================================
@@ -1351,6 +1387,7 @@ void CLI::_cmdArp(char *args)
     if (!sub) { Serial.println("Usage: arp scan|gratuitous|spoof|storm ..."); return; }
 
     if (strcasecmp(sub, "scan") == 0) {
+        if (!_requireIp()) return;
         char *a1 = strtok(nullptr, " \t");
         char *a2 = strtok(nullptr, " \t");
         uint32_t s, e;
@@ -1369,6 +1406,7 @@ void CLI::_cmdArp(char *args)
 
     } else if (strcasecmp(sub, "spoof") == 0) {
         if (!_requireArmed()) return;
+        if (!_requireIp()) return;
         char *a1 = strtok(nullptr, " \t");
         char *a2 = strtok(nullptr, " \t");
         char *a3 = strtok(nullptr, " \t");
@@ -1380,6 +1418,7 @@ void CLI::_cmdArp(char *args)
 
     } else if (strcasecmp(sub, "storm") == 0) {
         if (!_requireArmed()) return;
+        if (!_requireIp()) return;
         char *a1 = strtok(nullptr, " \t");
         char *a2 = strtok(nullptr, " \t");
         uint32_t cnt  = a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 10000;
@@ -1398,6 +1437,7 @@ void CLI::_cmdScan(char *args)
 {
     char *sub = args ? strtok(args, " \t") : nullptr;
     if (!sub) { Serial.println("Usage: scan common|ports|banner ..."); return; }
+    if (!_requireIp()) return;
 
     if (strcasecmp(sub, "common") == 0) {
         char *a1 = strtok(nullptr, " \t");
@@ -1444,6 +1484,7 @@ void CLI::_cmdRecon(char *args)
         reconPassive(_eth, a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 30);
 
     } else if (strcasecmp(sub, "sweep") == 0) {
+        if (!_requireIp()) return;
         char *a1 = strtok(nullptr, " \t");
         char *a2 = strtok(nullptr, " \t");
         uint32_t s, e;
@@ -1453,6 +1494,7 @@ void CLI::_cmdRecon(char *args)
         reconSweep(_eth, _ip, s, e);
 
     } else if (strcasecmp(sub, "trace") == 0) {
+        if (!_requireIp()) return;
         char *a1 = strtok(nullptr, " \t");
         char *a2 = strtok(nullptr, " \t");
         uint32_t t;
@@ -1561,7 +1603,88 @@ void CLI::_cmdSd(char *args)
         }
         return;
     }
-    Serial.println("Usage: sd [info] | init | format");
+    if (strcasecmp(sub, "ls") == 0 || strcasecmp(sub, "list") == 0) {
+        char *path = strtok(nullptr, " \t");
+        if (!path) path = (char *)"/";
+        if (!pcapSdAvailable()) { Serial.println("  SD not available."); return; }
+        File dir = SD.open(path);
+        if (!dir || !dir.isDirectory()) {
+            Serial.printf("  Cannot open directory: %s\r\n", path);
+            return;
+        }
+        Serial.printf("  Directory: %s\r\n", path);
+        int count = 0;
+        File f = dir.openNextFile();
+        while (f) {
+            if (f.isDirectory()) {
+                Serial.printf("    [DIR]  %s/\r\n", f.name());
+            } else {
+                Serial.printf("    %8u  %s\r\n", (uint32_t)f.size(), f.name());
+            }
+            count++;
+            f = dir.openNextFile();
+        }
+        dir.close();
+        if (count == 0) Serial.println("    (empty)");
+        return;
+    }
+    if (strcasecmp(sub, "cat") == 0 || strcasecmp(sub, "read") == 0) {
+        char *path = strtok(nullptr, " \t");
+        if (!path) { Serial.println("Usage: sd cat <filepath>"); return; }
+        if (!pcapSdAvailable()) { Serial.println("  SD not available."); return; }
+        File f = SD.open(path, FILE_READ);
+        if (!f) { Serial.printf("  Cannot open: %s\r\n", path); return; }
+        Serial.printf("--- %s (%u bytes) ---\r\n", path, (uint32_t)f.size());
+        while (f.available()) {
+            char buf[128];
+            int n = f.readBytes(buf, sizeof(buf) - 1);
+            buf[n] = '\0';
+            Serial.print(buf);
+        }
+        Serial.println("\r\n--- end ---");
+        f.close();
+        return;
+    }
+    if (strcasecmp(sub, "rm") == 0 || strcasecmp(sub, "delete") == 0) {
+        char *path = strtok(nullptr, " \t");
+        if (!path) { Serial.println("Usage: sd rm <filepath>"); return; }
+        if (!pcapSdAvailable()) { Serial.println("  SD not available."); return; }
+        if (SD.remove(path)) Serial.printf("  Deleted: %s\r\n", path);
+        else Serial.printf("  Failed to delete: %s\r\n", path);
+        return;
+    }
+    if (strcasecmp(sub, "rename") == 0 || strcasecmp(sub, "mv") == 0) {
+        char *src = strtok(nullptr, " \t");
+        char *dst = strtok(nullptr, " \t");
+        if (!src || !dst) { Serial.println("Usage: sd rename <old_path> <new_path>"); return; }
+        if (!pcapSdAvailable()) { Serial.println("  SD not available."); return; }
+        if (SD.rename(src, dst)) Serial.printf("  Renamed: %s -> %s\r\n", src, dst);
+        else Serial.printf("  Rename failed.\r\n");
+        return;
+    }
+    if (strcasecmp(sub, "mkdir") == 0) {
+        char *path = strtok(nullptr, " \t");
+        if (!path) { Serial.println("Usage: sd mkdir <path>"); return; }
+        if (!pcapSdAvailable()) { Serial.println("  SD not available."); return; }
+        if (SD.mkdir(path)) Serial.printf("  Created: %s/\r\n", path);
+        else Serial.printf("  mkdir failed.\r\n");
+        return;
+    }
+    if (strcasecmp(sub, "write") == 0) {
+        char *path = strtok(nullptr, " \t");
+        char *text = strtok(nullptr, "");
+        if (!path) { Serial.println("Usage: sd write <filepath> <text>"); return; }
+        if (!pcapSdAvailable()) { Serial.println("  SD not available."); return; }
+        File f = SD.open(path, FILE_APPEND);
+        if (!f) { Serial.printf("  Cannot open: %s\r\n", path); return; }
+        if (text && text[0]) {
+            f.println(text);
+        }
+        f.close();
+        Serial.printf("  Appended to %s\r\n", path);
+        return;
+    }
+    Serial.println("Usage: sd [info|init|format|ls [path]|cat <file>|rm <file>|rename <old> <new>|mkdir <path>|write <file> <text>]");
 }
 
 // =============================================================================
@@ -1733,6 +1856,7 @@ void CLI::_cmdFhrp(char *args)
 
     } else if (strcasecmp(sub, "hsrp") == 0) {
         if (!_requireArmed()) return;
+        if (!_requireIp()) return;
         char *a1 = strtok(nullptr, " \t"); // group
         char *a2 = strtok(nullptr, " \t"); // virtualIp
         char *a3 = strtok(nullptr, " \t"); // priority
@@ -1748,6 +1872,7 @@ void CLI::_cmdFhrp(char *args)
 
     } else if (strcasecmp(sub, "vrrp") == 0) {
         if (!_requireArmed()) return;
+        if (!_requireIp()) return;
         char *a1 = strtok(nullptr, " \t"); // vrid
         char *a2 = strtok(nullptr, " \t"); // virtualIp
         char *a3 = strtok(nullptr, " \t"); // priority
@@ -1816,6 +1941,7 @@ void CLI::_cmdDns(char *args)
     if (!sub) { Serial.println("Usage: dns resolve <hostname> [server-ip] | spoof <ip> [secs]"); return; }
 
     if (strcasecmp(sub, "resolve") == 0) {
+        if (!_requireIp()) return;
         char *a1 = strtok(nullptr, " \t"); // hostname
         char *a2 = strtok(nullptr, " \t"); // optional DNS server IP
         if (!a1) { Serial.println("Usage: dns resolve <hostname> [dns-server-ip]"); return; }
@@ -1846,6 +1972,7 @@ void CLI::_cmdSnmp(char *args)
 {
     char *sub = args ? strtok(args, " \t") : nullptr;
     if (!sub) { Serial.println("Usage: snmp probe <ip> | sweep <start> <end> [community]"); return; }
+    if (!_requireIp()) return;
 
     if (strcasecmp(sub, "probe") == 0) {
         char *a1 = strtok(nullptr, " \t"); // target IP
@@ -1928,6 +2055,8 @@ String CLI::statusJson()
     j += "\"fs_used_kb\":";  j += (uint32_t)(LittleFS.usedBytes()  / 1024); j += ",";
     // PCAP file
     j += "\"pcap_size\":"; j += pcapSize(); j += ",";
+    // Armed status
+    j += "\"armed\":"; j += _cfg.authorizedMode ? "true" : "false"; j += ",";
     // Mgmt IP (Wi-Fi)
     j += "\"mgmt_ip\":\""; j += WiFi.localIP().toString(); j += "\",";
     // Version

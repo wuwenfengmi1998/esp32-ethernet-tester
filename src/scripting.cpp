@@ -204,6 +204,41 @@ static void _execLine(const char *raw)
             uploadFileHttp(logPath, arg2);
         }
     }
+    else if (strncasecmp(l, "rm ", 3) == 0 || strncasecmp(l, "delete ", 7) == 0) {
+        const char *path = l + (l[0] == 'r' ? 3 : 7);
+        while (*path == ' ') path++;
+        if (pcapSdAvailable() && SD.remove(path))
+            Serial.printf("[SCRIPT] Deleted: %s\r\n", path);
+        else
+            Serial.printf("[SCRIPT] Cannot delete: %s\r\n", path);
+    }
+    else if (strncasecmp(l, "rename ", 7) == 0) {
+        char src[80] = {0}, dst[80] = {0};
+        if (sscanf(l + 7, "%79s %79s", src, dst) == 2 && pcapSdAvailable()) {
+            if (SD.rename(src, dst))
+                Serial.printf("[SCRIPT] Renamed: %s -> %s\r\n", src, dst);
+            else
+                Serial.printf("[SCRIPT] Rename failed: %s -> %s\r\n", src, dst);
+        }
+    }
+    else if (strncasecmp(l, "mkdir ", 6) == 0) {
+        const char *path = l + 6;
+        while (*path == ' ') path++;
+        if (pcapSdAvailable()) SD.mkdir(path);
+    }
+    else if (strncasecmp(l, "write_file ", 11) == 0) {
+        // write_file <path> <text>  -- append text to a file
+        char path[80] = {0};
+        const char *p = l + 11;
+        int pi = 0;
+        while (*p && *p != ' ' && pi < 79) path[pi++] = *p++;
+        path[pi] = '\0';
+        while (*p == ' ') p++;
+        if (path[0] && pcapSdAvailable()) {
+            File f = SD.open(path, FILE_APPEND);
+            if (f) { f.println(p); f.close(); }
+        }
+    }
     else if (strcasecmp(l, "abort") == 0) {
         Serial.println("[SCRIPT] abort");
         _scriptAbort = true;
