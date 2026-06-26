@@ -18,6 +18,8 @@
 #include "rogue_auth.h"
 #include "wg_tunnel.h"
 #include "wifi_web.h"
+#include "scripting.h"
+#include "logger.h"
 #include "net_util.h"
 #include "weblog.h"
 #include <WiFi.h>
@@ -164,6 +166,10 @@ void CLI::_dispatch(char *line)
     else if (strcasecmp(verb, "sd")       == 0) _cmdSd(args);
     else if (strcasecmp(verb, "wg")       == 0) _cmdWg(args);
     else if (strcasecmp(verb, "web")      == 0) _cmdWeb(args);
+    else if (strcasecmp(verb, "script")   == 0) _cmdScript(args);
+    else if (strcasecmp(verb, "log")       == 0) _cmdLog(args);
+    else if (strcasecmp(verb, "cron")      == 0) _cmdCron(args);
+    else if (strcasecmp(verb, "upload")    == 0) _cmdUpload(args);
     else if (strcasecmp(verb, "link")     == 0) {
         char *op = args ? strtok(args, " \t") : nullptr;
         char *a1 = strtok(nullptr, " \t");
@@ -338,6 +344,36 @@ void CLI::_cmdHelp()
         "  web auth set <user> <pass>       Set basic-auth credentials (saved)\r\n"
         "  web auth clear                   Disable authentication\r\n"
         "  web https on|off                 Enable/disable HTTPS (port 443)\r\n"
+        "\r\n"
+        "Scripting & Automation:\r\n"
+        "  script                           Show script engine status\r\n"
+        "  script list                      List scripts on SD (/scripts/)\r\n"
+        "  script run <file> [logname]      Run a script (optional auto-log)\r\n"
+        "  script stop                      Abort running script\r\n"
+        "  script create <file>             Create a template script on SD\r\n"
+        "\r\n"
+        "Output Logging:\r\n"
+        "  log                              Show logger status\r\n"
+        "  log start [name]                 Start logging to SD (auto-name if omitted)\r\n"
+        "  log stop                         Stop logging\r\n"
+        "  log list                         List log files on SD\r\n"
+        "  log delete <file>                Delete a log file\r\n"
+        "  log flush                        Force flush to SD\r\n"
+        "\r\n"
+        "Cron Scheduler:\r\n"
+        "  cron                             List scheduled tasks\r\n"
+        "  cron add <min> <hr> <dom> <mon> <dow> <cmd>  Add a cron entry\r\n"
+        "  cron remove <index>              Remove entry by index\r\n"
+        "  cron reload                      Re-read /cron.txt from SD\r\n"
+        "  cron clear                       Remove all entries\r\n"
+        "\r\n"
+        "File Upload:\r\n"
+        "  upload                           Show upload destination config\r\n"
+        "  upload set <url> [user] [pass]   Set default upload server\r\n"
+        "  upload clear                     Clear upload destination\r\n"
+        "  upload log <name> [url]          Upload a log file (HTTP POST)\r\n"
+        "  upload pcap [url]                Upload current pcap capture\r\n"
+        "  upload file <path> [url]         Upload any SD file\r\n"
         "\r\n"
         "System:\r\n"
         "  reboot | reset                   Restart the device\r\n"
@@ -1898,6 +1934,280 @@ String CLI::statusJson()
     j += "\"version\":\""; j += FW_VERSION; j += "\"";
     j += "}";
     return j;
+}
+
+// =============================================================================
+// script -- Run CLI command scripts from SD card
+// =============================================================================
+void CLI::_cmdScript(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+
+    if (!sub) {
+        Serial.println("  Script engine status:");
+        Serial.printf("    Running: %s\r\n", scriptIsRunning() ? "YES" : "no");
+        if (scriptIsRunning())
+            Serial.printf("    File:    %s\r\n", scriptCurrentFile());
+        Serial.println("\r\n  Usage: script run <file> [logname]");
+        Serial.println("         script list");
+        Serial.println("         script stop");
+        Serial.println("         script create <file>");
+        return;
+    }
+
+    if (strcasecmp(sub, "run") == 0) {
+        char *path = strtok(nullptr, " \t");
+        char *logName = strtok(nullptr, " \t");
+        if (!path) { Serial.println("Usage: script run <path> [logname]"); return; }
+        // Prepend /scripts/ if no leading /
+        char fullPath[80];
+        if (path[0] == '/') {
+            strlcpy(fullPath, path, sizeof(fullPath));
+        } else {
+            snprintf(fullPath, sizeof(fullPath), "/scripts/%s", path);
+        }
+        scriptRun(fullPath, logName);
+        return;
+    }
+
+    if (strcasecmp(sub, "list") == 0) {
+        if (!pcapSdAvailable()) { Serial.println("  SD card not available."); return; }
+        if (!SD.exists("/scripts")) { Serial.println("  /scripts/ directory not found."); return; }
+        File dir = SD.open("/scripts");
+        if (!dir || !dir.isDirectory()) { Serial.println("  Cannot open /scripts/"); return; }
+        Serial.println("  Scripts on SD:");
+        int count = 0;
+        File f = dir.openNextFile();
+        while (f) {
+            if (!f.isDirectory()) {
+                Serial.printf("    %-30s %8u bytes\r\n", f.name(), (uint32_t)f.size());
+                count++;
+            }
+            f = dir.openNextFile();
+        }
+        dir.close();
+        if (count == 0) Serial.println("    (empty -- put .txt files in /scripts/)");
+        return;
+    }
+
+    if (strcasecmp(sub, "stop") == 0) {
+        if (scriptIsRunning()) {
+            scriptAbort();
+            Serial.println("[SCRIPT] Abort requested.");
+        } else {
+            Serial.println("  No script is running.");
+        }
+        return;
+    }
+
+    if (strcasecmp(sub, "create") == 0) {
+        char *name = strtok(nullptr, " \t");
+        if (!name) { Serial.println("Usage: script create <filename>"); return; }
+        if (!pcapSdAvailable()) { Serial.println("  SD card not available."); return; }
+        if (!SD.exists("/scripts")) SD.mkdir("/scripts");
+        char path[80];
+        snprintf(path, sizeof(path), "/scripts/%s", name);
+        if (SD.exists(path)) {
+            Serial.printf("  %s already exists.\r\n", path);
+            return;
+        }
+        File f = SD.open(path, FILE_WRITE);
+        if (!f) { Serial.printf("  Cannot create %s\r\n", path); return; }
+        f.println("# Script: " + String(name));
+        f.println("# Lines starting with # are comments");
+        f.println("# Available directives: delay <ms>, wait <sec>, echo <msg>,");
+        f.println("#   log start [name], log stop, set <var> <val>,");
+        f.println("#   if_time HH:MM-HH:MM, if_day MON,TUE,...,");
+        f.println("#   upload log <name> <url>, upload pcap <url>,");
+        f.println("#   repeat <N> ... end_repeat, abort");
+        f.println("# Any other line is executed as a CLI command.");
+        f.println("");
+        f.println("echo Script started");
+        f.println("status");
+        f.println("echo Script complete");
+        f.close();
+        Serial.printf("  Created %s (template). Edit on SD card.\r\n", path);
+        return;
+    }
+
+    Serial.println("Usage: script run <file> [logname] | list | stop | create <file>");
+}
+
+// =============================================================================
+// log -- Output logger control
+// =============================================================================
+void CLI::_cmdLog(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+
+    if (!sub) {
+        Serial.println("  Logger status:");
+        Serial.printf("    Active: %s\r\n", logIsActive() ? "YES" : "no");
+        if (logIsActive()) {
+            Serial.printf("    File:   %s\r\n", logCurrentFile());
+            Serial.printf("    Size:   %u bytes\r\n", logSize());
+        }
+        return;
+    }
+
+    if (strcasecmp(sub, "start") == 0) {
+        char *name = strtok(nullptr, " \t");
+        logStart(name);
+        return;
+    }
+    if (strcasecmp(sub, "stop") == 0) {
+        logStop();
+        return;
+    }
+    if (strcasecmp(sub, "list") == 0) {
+        logList();
+        return;
+    }
+    if (strcasecmp(sub, "delete") == 0) {
+        char *name = strtok(nullptr, " \t");
+        if (!name) { Serial.println("Usage: log delete <filename>"); return; }
+        if (logDelete(name)) Serial.printf("  Deleted %s\r\n", name);
+        else Serial.printf("  Failed to delete %s\r\n", name);
+        return;
+    }
+    if (strcasecmp(sub, "flush") == 0) {
+        logFlush();
+        Serial.println("  Log flushed.");
+        return;
+    }
+
+    Serial.println("Usage: log [start [name] | stop | list | delete <file> | flush]");
+}
+
+// =============================================================================
+// cron -- Scheduled task management
+// =============================================================================
+void CLI::_cmdCron(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+
+    if (!sub || strcasecmp(sub, "list") == 0) {
+        cronList();
+        return;
+    }
+
+    if (strcasecmp(sub, "reload") == 0) {
+        cronReload();
+        Serial.println("  Cron entries reloaded from /cron.txt");
+        return;
+    }
+
+    if (strcasecmp(sub, "add") == 0) {
+        char *entry = strtok(nullptr, "");
+        if (!entry) {
+            Serial.println("Usage: cron add <min> <hour> <dom> <mon> <dow> <command>");
+            Serial.println("  Example: cron add */5 * * * * status");
+            Serial.println("  Example: cron add 0 8 * * 1-5 /scripts/morning.txt");
+            return;
+        }
+        if (cronAdd(entry)) Serial.println("  Entry added.");
+        else Serial.println("  Failed to add entry.");
+        return;
+    }
+
+    if (strcasecmp(sub, "remove") == 0) {
+        char *idx = strtok(nullptr, " \t");
+        if (!idx) { Serial.println("Usage: cron remove <index>"); return; }
+        int i = atoi(idx);
+        if (cronRemove(i)) Serial.println("  Entry removed.");
+        else Serial.println("  Invalid index.");
+        return;
+    }
+
+    if (strcasecmp(sub, "clear") == 0) {
+        cronClear();
+        Serial.println("  All cron entries cleared.");
+        return;
+    }
+
+    Serial.println("Usage: cron [list | reload | add <spec> <cmd> | remove <#> | clear]");
+}
+
+// =============================================================================
+// upload -- File upload to remote server
+// =============================================================================
+void CLI::_cmdUpload(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+
+    if (!sub) {
+        char url[128], user[33], pass[65];
+        uploadGetDefault(url, sizeof(url), user, sizeof(user), pass, sizeof(pass));
+        Serial.println("  Upload configuration:");
+        Serial.printf("    URL:  %s\r\n", url[0] ? url : "(not set)");
+        Serial.printf("    User: %s\r\n", user[0] ? user : "(none)");
+        return;
+    }
+
+    if (strcasecmp(sub, "set") == 0) {
+        char *url  = strtok(nullptr, " \t");
+        char *user = strtok(nullptr, " \t");
+        char *pass = strtok(nullptr, " \t");
+        if (!url) { Serial.println("Usage: upload set <url> [user] [pass]"); return; }
+        uploadSetDefault(url, user, pass);
+        return;
+    }
+
+    if (strcasecmp(sub, "clear") == 0) {
+        uploadSetDefault("", nullptr, nullptr);
+        Serial.println("  Upload destination cleared.");
+        return;
+    }
+
+    if (strcasecmp(sub, "log") == 0) {
+        char *name = strtok(nullptr, " \t");
+        char *url  = strtok(nullptr, " \t");
+        if (!name) { Serial.println("Usage: upload log <name> [url]"); return; }
+        char logPath[80];
+        snprintf(logPath, sizeof(logPath), "/logs/%s", name);
+        if (!strstr(name, ".log")) strlcat(logPath, ".log", sizeof(logPath));
+        if (url) {
+            uploadFileHttp(logPath, url);
+        } else {
+            char defUrl[128], defUser[33], defPass[65];
+            uploadGetDefault(defUrl, sizeof(defUrl), defUser, sizeof(defUser), defPass, sizeof(defPass));
+            if (!defUrl[0]) { Serial.println("  No URL specified and no default set."); return; }
+            uploadFileHttpAuth(logPath, defUrl, defUser, defPass);
+        }
+        return;
+    }
+
+    if (strcasecmp(sub, "pcap") == 0) {
+        char *url = strtok(nullptr, " \t");
+        const char *path = pcapPath();
+        if (!path || pcapSize() == 0) { Serial.println("  No pcap file available."); return; }
+        if (url) {
+            uploadFileHttp(path, url);
+        } else {
+            char defUrl[128], defUser[33], defPass[65];
+            uploadGetDefault(defUrl, sizeof(defUrl), defUser, sizeof(defUser), defPass, sizeof(defPass));
+            if (!defUrl[0]) { Serial.println("  No URL specified and no default set."); return; }
+            uploadFileHttpAuth(path, defUrl, defUser, defPass);
+        }
+        return;
+    }
+
+    if (strcasecmp(sub, "file") == 0) {
+        char *path = strtok(nullptr, " \t");
+        char *url  = strtok(nullptr, " \t");
+        if (!path) { Serial.println("Usage: upload file <sd_path> [url]"); return; }
+        if (url) {
+            uploadFileHttp(path, url);
+        } else {
+            char defUrl[128], defUser[33], defPass[65];
+            uploadGetDefault(defUrl, sizeof(defUrl), defUser, sizeof(defUser), defPass, sizeof(defPass));
+            if (!defUrl[0]) { Serial.println("  No URL specified and no default set."); return; }
+            uploadFileHttpAuth(path, defUrl, defUser, defPass);
+        }
+        return;
+    }
+
+    Serial.println("Usage: upload [set <url> [user pass] | clear | log <name> [url] | pcap [url] | file <path> [url]]");
 }
 
 // =============================================================================

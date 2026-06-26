@@ -105,6 +105,10 @@ private:
     void _cmdSd(char *args);
     void _cmdWg(char *args);
     void _cmdWeb(char *args);
+    void _cmdScript(char *args);
+    void _cmdLog(char *args);
+    void _cmdCron(char *args);
+    void _cmdUpload(char *args);
     void _cmdFhrp(char *args);
     void _cmdDhcpv6(char *args);
     void _cmdDns(char *args);

@@ -13,6 +13,7 @@
 #include "pcap.h"
 #include "cli.h"
 #include "wg_tunnel.h"
+#include "scripting.h"
 #include "weblog.h"
 #include <WiFi.h>
 
@@ -120,6 +121,10 @@ void setup()
         // Delay start until Wi-Fi connects (handled in loop)
     }
 
+    // Scripting engine: give it the CLI command runner
+    scriptSetCommandHandler([](const String &c) { serialCli.runCommand(c); });
+    cronInit();
+
     serialCli.begin();
 }
 
@@ -133,6 +138,7 @@ void loop()
     serialCli.loopbackTick();     // Reflect frames if loopback mode is on
     serialCli.advertiseTick();    // Transmit LLDP/CDP advertisements if enabled
     web.loop();                   // Execute queued web commands
+    cronTick();                   // Check cron scheduler
     wgTcpListenerTick();          // Service WireGuard TCP CLI clients
 
     // Auto-start WireGuard tunnel once Wi-Fi connects

@@ -1,4 +1,5 @@
 #include "weblog.h"
+#include "logger.h"
 
 TeeStream Out;
 
@@ -10,6 +11,7 @@ void TeeStream::_ensureMutex()
 size_t TeeStream::write(uint8_t c)
 {
     ::Serial.write(c);
+    logWrite(&c, 1);
     if (_capturing) {
         _ensureMutex();
         if (_mtx && xSemaphoreTake(_mtx, portMAX_DELAY) == pdTRUE) {
@@ -24,6 +26,7 @@ size_t TeeStream::write(uint8_t c)
 size_t TeeStream::write(const uint8_t *buf, size_t size)
 {
     ::Serial.write(buf, size);
+    logWrite(buf, size);
     if (_capturing) {
         _ensureMutex();
         if (_mtx && xSemaphoreTake(_mtx, portMAX_DELAY) == pdTRUE) {
