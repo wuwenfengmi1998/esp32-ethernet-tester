@@ -1,4 +1,5 @@
 #include "pcap.h"
+#include "pcap_filter.h"
 #include "../include/config.h"
 #include "net_util.h"
 #include "weblog.h"
@@ -174,6 +175,7 @@ uint32_t pcapCapture(W5500Raw &eth, uint32_t seconds, uint32_t maxFrames)
     Serial.printf("\r\nCapturing to %s (%s)", path, _sdReady ? "SD card" : "LittleFS");
     if (seconds)   Serial.printf(" for %lu s", (unsigned long)seconds);
     if (maxFrames) Serial.printf(", max %lu frames", (unsigned long)maxFrames);
+    if (pcapFilterActive()) Serial.print(" [filter active]");
     Serial.println(" (any key stops)...");
 
     static uint8_t buf[ETH_MAX_LEN + 4];
@@ -186,6 +188,7 @@ uint32_t pcapCapture(W5500Raw &eth, uint32_t seconds, uint32_t maxFrames)
         if (maxFrames && n >= maxFrames) break;
         uint16_t len = eth.recvFrame(buf, sizeof(buf));
         if (len >= 14) {
+            if (!pcapFilterMatch(buf, len)) continue;  // filter mismatch
             uint32_t ms = millis() - t0;
             uint8_t rh[16];
             le32(rh + 0, ms / 1000);
@@ -233,4 +236,212 @@ void pcapDelete()
     // Try both locations
     if (_sdReady && SD.exists(PCAP_PATH_SD)) SD.remove(PCAP_PATH_SD);
     if (LittleFS.exists(PCAP_PATH_FS)) LittleFS.remove(PCAP_PATH_FS);
+}
+
+// =============================================================================
+// pcapCaptureRing -- circular-buffer capture
+//
+// Uses a raw ring file on SD (required for ring mode). The ring file stores
+// back-to-back: [4-byte recLen][16-byte pcap record hdr][frame data].
+// When the write position reaches maxBytes, it wraps to 0.
+// On stop we reconstruct a proper PCAP from the ring.
+// =============================================================================
+#define RING_TMP_PATH  "/capture_ring.tmp"
+#define RING_REC_OVERHEAD  (4 + 16)  // recLen(4) + pcap record header(16)
+
+uint32_t pcapCaptureRing(W5500Raw &eth, uint32_t seconds, uint64_t maxBytes)
+{
+    if (!_sdReady) {
+        Serial.println("[pcap] Ring capture requires an SD card.");
+        return 0;
+    }
+
+    // Determine ring size
+    if (maxBytes == 0) {
+        uint64_t freeBytes = SD.totalBytes() - SD.usedBytes();
+        maxBytes = (freeBytes * 90ULL) / 100ULL;
+        if (maxBytes < 4096) {
+            Serial.println("[pcap] SD card too full for ring capture.");
+            return 0;
+        }
+    }
+
+    // Remove any previous temp file
+    if (SD.exists(RING_TMP_PATH)) SD.remove(RING_TMP_PATH);
+
+    // Pre-allocate by creating the file
+    File ring = SD.open(RING_TMP_PATH, "w");
+    if (!ring) {
+        Serial.println("[pcap] Cannot create ring file on SD.");
+        return 0;
+    }
+    ring.close();
+
+    // Open for random-access writing
+    ring = SD.open(RING_TMP_PATH, "w");
+    if (!ring) {
+        Serial.println("[pcap] Cannot open ring file.");
+        return 0;
+    }
+
+    Serial.printf("\r\n[pcap] Ring capture: %.1f MB max",
+                  (double)maxBytes / (1024.0 * 1024.0));
+    if (seconds) Serial.printf(", %lu s", (unsigned long)seconds);
+    if (pcapFilterActive()) Serial.print(" [filter active]");
+    Serial.println(" (any key stops)...");
+
+    static uint8_t buf[ETH_MAX_LEN + 4];
+    uint32_t deadline = seconds ? (millis() + seconds * 1000UL) : 0;
+    uint64_t writePos = 0;
+    uint32_t totalFrames = 0;
+    bool wrapped = false;
+    uint64_t wrapPoint = 0;     // where the oldest data starts after wrapping
+    uint32_t t0 = millis();
+
+    while (true) {
+        if (deadline && (int32_t)(deadline - millis()) <= 0) break;
+        if (Serial.available()) { while (Serial.available()) Serial.read(); break; }
+
+        uint16_t len = eth.recvFrame(buf, sizeof(buf));
+        if (len < 14) { delay(1); continue; }
+        if (!pcapFilterMatch(buf, len)) continue;  // filter mismatch
+
+        uint32_t recSize = RING_REC_OVERHEAD + len;
+
+        // Check if this record would push us past the limit
+        if (writePos + recSize > maxBytes) {
+            // Wrap around
+            wrapped = true;
+            writePos = 0;
+        }
+
+        // If we've wrapped, the data after writePos+recSize may contain old
+        // records that are now being overwritten. Track where valid data starts.
+        if (wrapped) {
+            wrapPoint = writePos + recSize;
+            if (wrapPoint >= maxBytes) wrapPoint = 0;
+        }
+
+        // Seek and write the record
+        ring.seek(writePos);
+
+        // Record format: [recLen:4][ts_sec:4][ts_usec:4][incl_len:4][orig_len:4][frame]
+        uint32_t ms = millis() - t0;
+        uint8_t hdr[RING_REC_OVERHEAD];
+        le32(hdr + 0, recSize);            // total record size (for skipping)
+        le32(hdr + 4, ms / 1000);          // timestamp seconds
+        le32(hdr + 8, (ms % 1000) * 1000); // timestamp microseconds
+        le32(hdr + 12, len);               // incl_len
+        le32(hdr + 16, len);               // orig_len
+        ring.write(hdr, RING_REC_OVERHEAD);
+        ring.write(buf, len);
+
+        writePos += recSize;
+        totalFrames++;
+
+        if ((totalFrames & 0xFF) == 0)
+            Serial.printf("  %lu frames, pos %llu/%llu%s\r\n",
+                          (unsigned long)totalFrames,
+                          (unsigned long long)writePos,
+                          (unsigned long long)maxBytes,
+                          wrapped ? " (wrapped)" : "");
+    }
+
+    ring.close();
+
+    // Now reconstruct a proper PCAP file from the ring
+    Serial.println("[pcap] Reconstructing PCAP from ring buffer...");
+
+    ring = SD.open(RING_TMP_PATH, "r");
+    if (!ring) {
+        Serial.println("[pcap] Cannot reopen ring file!");
+        return 0;
+    }
+
+    uint64_t ringFileSize = ring.size();
+    // Determine the read range
+    uint64_t readStart, readEnd;
+    if (!wrapped) {
+        readStart = 0;
+        readEnd = writePos;
+    } else {
+        readStart = wrapPoint;
+        readEnd = writePos;  // we'll read from wrapPoint -> EOF, then 0 -> writePos
+    }
+
+    // Open the final PCAP file
+    if (SD.exists(PCAP_PATH_SD)) SD.remove(PCAP_PATH_SD);
+    File out = SD.open(PCAP_PATH_SD, "w");
+    if (!out) {
+        Serial.println("[pcap] Cannot create output PCAP!");
+        ring.close();
+        return 0;
+    }
+
+    // Write PCAP global header
+    uint8_t gh[24];
+    le32(gh + 0, 0xA1B2C3D4UL);
+    le16(gh + 4, 2); le16(gh + 6, 4);
+    le32(gh + 8, 0); le32(gh + 12, 0);
+    le32(gh + 16, ETH_MAX_LEN);
+    le32(gh + 20, 1);
+    out.write(gh, 24);
+
+    uint32_t keptFrames = 0;
+    uint32_t bytesWritten = 24;
+
+    // Lambda to copy records from a range in the ring file
+    auto copyRecords = [&](uint64_t from, uint64_t to) {
+        ring.seek(from);
+        uint64_t pos = from;
+        while (pos + RING_REC_OVERHEAD <= to) {
+            uint8_t hdr[RING_REC_OVERHEAD];
+            if (ring.read(hdr, RING_REC_OVERHEAD) != RING_REC_OVERHEAD) break;
+
+            uint32_t recSize = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8)
+                             | ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
+            uint32_t frameLen = recSize - RING_REC_OVERHEAD;
+
+            if (pos + recSize > to) break; // partial record
+            if (recSize < RING_REC_OVERHEAD || frameLen > ETH_MAX_LEN + 4) break;
+
+            // Write the pcap record header (skip the 4-byte recLen prefix)
+            out.write(hdr + 4, 16);
+
+            // Copy frame data in chunks
+            uint32_t remaining = frameLen;
+            while (remaining > 0) {
+                uint32_t chunk = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+                uint32_t got = ring.read(buf, chunk);
+                if (got == 0) break;
+                out.write(buf, got);
+                remaining -= got;
+            }
+
+            bytesWritten += 16 + frameLen;
+            keptFrames++;
+            pos += recSize;
+        }
+    };
+
+    if (!wrapped) {
+        copyRecords(0, writePos);
+    } else {
+        // Read from wrapPoint to end of written data (may be ringFileSize or less)
+        copyRecords(wrapPoint, ringFileSize);
+        // Then from 0 to writePos
+        if (writePos > 0) copyRecords(0, writePos);
+    }
+
+    out.close();
+    ring.close();
+
+    // Clean up temp file
+    SD.remove(RING_TMP_PATH);
+
+    Serial.printf("[pcap] Ring done: %lu total frames, %lu kept, %lu bytes saved.\r\n",
+                  (unsigned long)totalFrames, (unsigned long)keptFrames,
+                  (unsigned long)bytesWritten);
+    Serial.println("Download from the web UI (PCAP card) and open in Wireshark.");
+    return keptFrames;
 }

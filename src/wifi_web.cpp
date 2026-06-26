@@ -449,9 +449,19 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
   <div class="tab-content" id="tab-files">
    <div class="card"><h2>PCAP Capture</h2>
     <div class="row">
+     <input id="pcfilt" placeholder="filter: tcp and port 80" style="width:20em">
+     <button onclick="var f=v('pcfilt');cmd(f?'pcap filter '+f:'pcap nofilter')">Set Filter</button>
+     <button onclick="cmd('pcap nofilter');document.getElementById('pcfilt').value=''">Clear</button>
+    </div>
+    <div class="row">
      <input id="pcsecs" type="number" value="10" style="width:5em" placeholder="secs">
      <input id="pcmax" type="number" placeholder="max frames" style="width:7em">
      <button onclick="cmd('pcap start '+v('pcsecs')+' '+(v('pcmax')||'0'))">Capture</button>
+    </div>
+    <div class="row">
+     <input id="pcrsecs" type="number" value="0" style="width:5em" placeholder="secs (0=inf)">
+     <input id="pcrmb" type="number" placeholder="max MB (0=90%% SD)" style="width:10em">
+     <button onclick="cmd('pcap ring '+v('pcrsecs')+' '+(v('pcrmb')||'0'))">Ring Capture</button>
     </div>
     <div class="row">
      <button onclick="cmd('pcap status')">Status</button>

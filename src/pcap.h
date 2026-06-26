@@ -31,6 +31,12 @@ bool pcapSdFormat();
 // (0 = until maxFrames or a key press). Returns the number of frames written.
 uint32_t pcapCapture(W5500Raw &eth, uint32_t seconds, uint32_t maxFrames);
 
+// Circular-buffer capture: writes frames until `seconds` elapse or a key is
+// pressed. When the file reaches `maxBytes` (0 = 90% of SD free space),
+// it wraps and overwrites the oldest frames. On stop, the file is rewritten
+// in chronological order as a valid PCAP. Returns total frames kept.
+uint32_t pcapCaptureRing(W5500Raw &eth, uint32_t seconds, uint64_t maxBytes);
+
 // Size in bytes of the stored capture (0 if none).
 uint32_t pcapSize();
 

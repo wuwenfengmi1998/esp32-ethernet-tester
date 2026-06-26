@@ -11,6 +11,7 @@
 #include "linkdiag.h"
 #include "ipv6_tool.h"
 #include "pcap.h"
+#include "pcap_filter.h"
 #include "fhrp.h"
 #include "dhcpv6.h"
 #include "dns_tool.h"
@@ -319,6 +320,9 @@ void CLI::_cmdHelp()
         "  snmp sweep <cidr|start> [end] [comm] SNMP sweep of an IP range\r\n"
         "  snmp writetest <ip> [write-comm]     Test write access via sysContact.0\r\n"
         "  pcap start [secs] [maxframes]    Capture frames to /capture.pcap (web download)\r\n"
+        "  pcap ring [secs] [maxMB]         Circular capture (0 MB = 90%% of SD free)\r\n"
+        "  pcap filter <BPF expr>           Set capture filter (Wireshark syntax)\r\n"
+        "  pcap nofilter                    Clear capture filter\r\n"
         "  pcap status | delete             Show or remove the stored capture\r\n"
         "\r\n"
         "Offensive / DoS tests (require 'arm' -- authorized lab use only):\r\n"
@@ -1648,7 +1652,8 @@ void CLI::_cmdPcap(char *args)
                               (unsigned long)sz);
         else    Serial.println("\r\nNo capture stored. Use 'pcap start [secs] [maxframes]'.");
         Serial.printf("Storage: %s\r\n", pcapSdAvailable() ? "TF/SD card" : "internal flash (LittleFS)");
-        Serial.println("Subcommands: start [secs] [maxframes] | status | delete");
+        Serial.printf("Filter: %s\r\n", pcapFilterActive() ? "active" : "none");
+        Serial.println("Subcommands: start [secs] [maxframes] | ring [secs] [maxMB] | filter <expr> | nofilter | status | delete");
         return;
     }
 
@@ -1659,12 +1664,39 @@ void CLI::_cmdPcap(char *args)
         uint32_t maxf = a2 ? (uint32_t)strtoul(a2, nullptr, 10) : 0;
         pcapCapture(_eth, secs, maxf);
 
+    } else if (strcasecmp(sub, "ring") == 0) {
+        char *a1 = strtok(nullptr, " \t");
+        char *a2 = strtok(nullptr, " \t");
+        uint32_t secs = a1 ? (uint32_t)strtoul(a1, nullptr, 10) : 0;
+        uint64_t maxBytes = 0;
+        if (a2) {
+            uint64_t mb = (uint64_t)strtoul(a2, nullptr, 10);
+            maxBytes = mb * 1024ULL * 1024ULL;
+        }
+        pcapCaptureRing(_eth, secs, maxBytes);
+
+    } else if (strcasecmp(sub, "filter") == 0) {
+        // Everything after "filter" is the expression
+        char *expr = strtok(nullptr, "");  // rest of line
+        if (!expr || !*expr) {
+            Serial.printf("[filter] Current: %s\r\n", pcapFilterActive() ? "active" : "none");
+            Serial.println("Usage: pcap filter <BPF expression>");
+            Serial.println("Examples: tcp and port 80 | host 10.0.0.1 | not arp | net 192.168.0.0/16");
+        } else {
+            if (pcapFilterCompile(expr))
+                Serial.println("[filter] Filter set. Will apply to next capture.");
+        }
+
+    } else if (strcasecmp(sub, "nofilter") == 0) {
+        pcapFilterClear();
+        Serial.println("[filter] Cleared. Capturing all frames.");
+
     } else if (strcasecmp(sub, "delete") == 0) {
         pcapDelete();
         Serial.println("Capture file deleted.");
 
     } else {
-        Serial.println("Usage: pcap start [secs] [maxframes] | status | delete");
+        Serial.println("Usage: pcap start [secs] [maxframes] | ring [secs] [maxMB] | filter <expr> | nofilter | status | delete");
     }
 }
 
