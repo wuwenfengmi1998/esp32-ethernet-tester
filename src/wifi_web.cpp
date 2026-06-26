@@ -382,11 +382,23 @@ pre{background:var(--input);border:1px solid var(--border);border-radius:6px;pad
      <button onclick="cmd('fhrp listen')">FHRP</button>
      <button onclick="cmd('dhcpv6 probe')">DHCPv6</button>
     </div>
+   </div>
+   <div class="card"><h2>SNMP Scan</h2>
     <div class="row">
-     <input id="snmpip" placeholder="target IP">
-     <button onclick="cmd('snmp probe '+v('snmpip'))">SNMP</button>
-     <input id="snmprange" placeholder="end IP" style="width:8em">
-     <button onclick="cmd('snmp sweep '+v('snmpip')+' '+v('snmprange'))">Sweep</button>
+     <input id="snmpip" placeholder="target / start IP" style="width:9em">
+     <input id="snmpend" placeholder="end IP or CIDR" style="width:9em">
+    </div>
+    <div class="row">
+     <input id="snmpRead" placeholder="read community (public)" style="width:10em">
+     <input id="snmpWrite" placeholder="write community (private)" style="width:10em">
+    </div>
+    <div class="row">
+     <button onclick="if(document.getElementById('snmpRandMac').checked)cmd('mac random');let c=v('snmpRead'),w=v('snmpWrite'),a=c||(w?'public':'');cmd('snmp probe '+v('snmpip')+(a?' '+a:'')+(w?' '+w:''))">Probe</button>
+     <button onclick="if(document.getElementById('snmpRandMac').checked)cmd('mac random');let s=v('snmpip'),e=v('snmpend'),c=v('snmpRead')||'public';cmd('snmp sweep '+s+' '+(e||s)+' '+c)">Sweep</button>
+     <button class="warn" onclick="if(document.getElementById('snmpRandMac').checked)cmd('mac random');cmd('snmp writetest '+v('snmpip')+' '+(v('snmpWrite')||'private'))">Write Test</button>
+    </div>
+    <div class="row" style="gap:12px">
+     <label style="font-size:12px"><input type="checkbox" id="snmpRandMac" style="width:auto"> Random src MAC</label>
     </div>
    </div>
   </div>

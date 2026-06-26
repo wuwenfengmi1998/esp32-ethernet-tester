@@ -315,8 +315,9 @@ void CLI::_cmdHelp()
         "  fhrp listen [secs]               Decode HSRP/VRRP advertisements\r\n"
         "  dhcpv6 probe [secs]              Discover DHCPv6 servers (SOLICIT)\r\n"
         "  dns resolve <host> [server]      Unicast DNS A-record query\r\n"
-        "  snmp probe <ip>                  SNMP community-string probe (sysDescr)\r\n"
-        "  snmp sweep <start> <end> [comm]  SNMP sweep of an IP range\r\n"
+        "  snmp probe <ip> [comm ...]       SNMP community-string probe (sysDescr)\r\n"
+        "  snmp sweep <cidr|start> [end] [comm] SNMP sweep of an IP range\r\n"
+        "  snmp writetest <ip> [write-comm]     Test write access via sysContact.0\r\n"
         "  pcap start [secs] [maxframes]    Capture frames to /capture.pcap (web download)\r\n"
         "  pcap status | delete             Show or remove the stored capture\r\n"
         "\r\n"
@@ -2074,27 +2075,54 @@ void CLI::_cmdDns(char *args)
 void CLI::_cmdSnmp(char *args)
 {
     char *sub = args ? strtok(args, " \t") : nullptr;
-    if (!sub) { Serial.println("Usage: snmp probe <ip> | sweep <start> <end> [community]"); return; }
+    if (!sub) { Serial.println("Usage: snmp probe <ip> [comm1 comm2 ...] | sweep <cidr|start> [end] [community]"); return; }
     if (!_requireIp()) return;
 
     if (strcasecmp(sub, "probe") == 0) {
         char *a1 = strtok(nullptr, " \t"); // target IP
         uint32_t t;
-        if (!a1 || !strToIp(a1, &t)) { Serial.println("Usage: snmp probe <ip>"); return; }
-        snmpProbe(_eth, _ip, t);
+        if (!a1 || !strToIp(a1, &t)) { Serial.println("Usage: snmp probe <ip> [community ...]"); return; }
+        // Collect optional community strings
+        const char *comms[16];
+        uint8_t nComms = 0;
+        char *c = strtok(nullptr, " \t");
+        while (c && nComms < 16) { comms[nComms++] = c; c = strtok(nullptr, " \t"); }
+        snmpProbe(_eth, _ip, t, nComms > 0 ? comms : nullptr, nComms);
 
     } else if (strcasecmp(sub, "sweep") == 0) {
-        char *a1 = strtok(nullptr, " \t"); // start IP
-        char *a2 = strtok(nullptr, " \t"); // end IP
-        char *a3 = strtok(nullptr, " \t"); // optional community
+        char *a1 = strtok(nullptr, " \t"); // CIDR or start IP
+        char *a2 = strtok(nullptr, " \t"); // end IP or community (if CIDR)
+        char *a3 = strtok(nullptr, " \t"); // community (if start/end)
         uint32_t s, e;
-        if (!a1 || !a2 || !strToIp(a1, &s) || !strToIp(a2, &e)) {
-            Serial.println("Usage: snmp sweep <start-ip> <end-ip> [community]"); return;
+        if (!a1) {
+            Serial.println("Usage: snmp sweep <cidr|start-ip> [end-ip] [community]"); return;
         }
-        snmpSweep(_eth, _ip, s, e, a3 ? a3 : "public");
+        const char *comm = "public";
+        if (strchr(a1, '/')) {
+            // CIDR notation
+            if (!cidrToRange(a1, &s, &e)) {
+                Serial.println("Invalid CIDR. Example: snmp sweep 192.168.1.0/24"); return;
+            }
+            if (a2) comm = a2;  // community follows CIDR
+        } else {
+            if (!a2 || !strToIp(a1, &s) || !strToIp(a2, &e)) {
+                Serial.println("Usage: snmp sweep <cidr|start-ip> [end-ip] [community]"); return;
+            }
+            if (a3) comm = a3;
+        }
+        snmpSweep(_eth, _ip, s, e, comm);
+
+    } else if (strcasecmp(sub, "writetest") == 0 || strcasecmp(sub, "write") == 0) {
+        char *a1 = strtok(nullptr, " \t"); // target IP
+        char *a2 = strtok(nullptr, " \t"); // optional write community
+        uint32_t t;
+        if (!a1 || !strToIp(a1, &t)) {
+            Serial.println("Usage: snmp writetest <ip> [write-community]"); return;
+        }
+        snmpWriteTest(_eth, _ip, t, a2 ? a2 : "private");
 
     } else {
-        Serial.println("Usage: snmp probe <ip> | sweep <start> <end> [community]");
+        Serial.println("Usage: snmp probe <ip> [comm...] | sweep <cidr|start> [end] [comm] | writetest <ip> [comm]");
     }
 }
 

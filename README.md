@@ -28,7 +28,11 @@ interface provides remote control with a tabbed multi-panel UI.
 - [DHCPv6](#dhcpv6)
 - [DNS Tools](#dns-tools)
 - [SNMP Recon](#snmp-recon)
+- [Port Scanning & Banner Grab](#port-scanning--banner-grab)
+- [Network Assessment](#network-assessment)
+- [MAC Randomization](#mac-randomization)
 - [Rogue Authenticator](#rogue-authenticator)
+- [OTA Firmware Updates](#ota-firmware-updates)
 - [RFC 2544 Suite](#rfc-2544-suite)
 - [SD Card & File Manager](#sd-card--file-manager)
 - [WireGuard VPN](#wireguard-vpn)
@@ -54,16 +58,19 @@ interface provides remote control with a tabbed multi-panel UI.
 | **DHCPv6** | Stateful IPv6 server discovery (SOLICIT) and rogue DHCPv6 server |
 | **DNS** | Unicast DNS A-record resolution and rogue DNS responder (spoof) |
 | **mDNS probe** | Resolve `<host>.local` over multicast DNS and ping for reachability |
-| **802.1X / EAP** | Full supplicant: EAP-MD5, EAP-TLS, PEAPv0/MSCHAPv2, EAP-TTLS (PAP + MSCHAPv2) |
+| **802.1X / EAP** | Full supplicant: EAP-MD5, EAP-TLS, PEAPv0/MSCHAPv2, EAP-TTLS (PAP + MSCHAPv2); configurable target MAC/IP |
 | **Rogue authenticator** | Fake 802.1X authenticator to harvest EAP-MD5 / MSCHAPv2 credentials |
 | **EAPOL attacks** | Start-flood, spoofed logoff, MAB probe |
 | **IPv6 / NDP** | Passive NDP decode (RS/RA/NS/NA) and rogue Router Advertisement (SLAAC takeover) |
 | **FHRP (HSRP/VRRP)** | Passive decode of HSRP/VRRP advertisements + gateway hijack |
 | **L2 attacks** | 802.1Q VLAN inject, Q-in-Q hop, DTP spoof, CAM flood, STP root/TCN, LLDP/CDP flood |
 | **ARP tools** | Gratuitous ARP, ARP MITM spoof, ARP storm, ARP scan |
-| **SNMP recon** | Community-string probe (sysDescr) and IP-range sweep |
-| **Port scanning** | TCP SYN scan, banner grab, common-port scan |
+| **SNMP recon** | Community probe, IP sweep, write-access test (sysContact.0 read/set/restore) |
+| **Port scanning** | TCP SYN scan with banner grab for 30+ services, randomizable port order |
+| **Network assessment** | Combined ping sweep + ARP scan + port scan + SNMP with CIDR, host/port randomization, per-host MAC rotation |
 | **Reconnaissance** | Passive host/protocol mapping, ICMP ping sweep, traceroute |
+| **MAC randomization** | Per-operation or per-host random locally-administered MACs; global auto-randomize option |
+| **OTA updates** | Firmware update via TFTP (CLI) or HTTP file upload (web UI) |
 | **PCAP capture** | Capture frames to SD card or LittleFS, downloadable from web UI |
 | **SD card** | FAT32 file manager: ls, cat, rm, rename, mkdir, write; PCAP/log storage |
 | **WireGuard VPN** | Tunnel management interface back to a central server |
@@ -607,6 +614,12 @@ The TLS engine uses mbedTLS (ESP-IDF); fragmented EAP-TLS exchange is handled
 per RFC 5216. Certificates are stored in LittleFS and managed via the web UI or
 `dot1x cert` CLI commands.
 
+**Target specification:** By default EAPOL frames are sent to the PAE multicast
+group (`01:80:C2:00:00:03`). Use `dot1x target <MAC>` to direct frames to a
+specific authenticator's unicast MAC, or `dot1x target <IP>` to record the
+authenticator's IP (useful for documentation/scripting). Clear with
+`dot1x target clear`.
+
 ---
 
 ## FHRP (HSRP / VRRP)
@@ -654,12 +667,90 @@ testing per RFC 8415:
 
 [src/snmp_recon.cpp](src/snmp_recon.cpp) performs SNMP reconnaissance:
 
-- **Probe (`snmp probe`)** — sends SNMPv1 GET requests for `sysDescr.0`
-  (OID 1.3.6.1.2.1.1.1.0) using common community strings (`public`, `private`,
-  `community`, `admin`, `snmp`, `monitor`). Reports any accepted community and
-  the device description.
-- **Sweep (`snmp sweep`)** — probes an IP range (up to 1024 hosts) with a given
-  community string, identifying all SNMP-responsive devices.
+- **Probe (`snmp probe <ip> [community ...]`)** — sends SNMPv1 GET requests for
+  `sysDescr.0` (OID 1.3.6.1.2.1.1.1.0) using specified or default community
+  strings (`public`, `private`, `community`, `admin`, `snmp`, `monitor`).
+  Reports any accepted community and the device description.
+- **Sweep (`snmp sweep <cidr|start> [end] [community]`)** — probes an IP range
+  (up to 1024 hosts, supports CIDR notation) with a given community string,
+  identifying all SNMP-responsive devices.
+- **Write Test (`snmp writetest <ip> [write-community]`)** — tests write access
+  by reading `sysContact.0`, setting it to a test marker, verifying the write,
+  then restoring the original value. Confirms whether the community string has
+  SET privileges.
+
+The web UI provides separate read/write community inputs and dedicated Probe,
+Sweep, and Write Test buttons.
+
+---
+
+## Port Scanning & Banner Grab
+
+[src/portscan.cpp](src/portscan.cpp) implements TCP SYN scanning with service
+identification:
+
+- **Common scan (`scan common <ip>`)** — scans well-known ports (21, 22, 23, 25,
+  53, 80, 110, 143, 443, 445, 993, 995, 3306, 3389, 5432, 8080, 8443)
+- **Range scan (`scan ports <ip> <first> <last>`)** — scans a contiguous port range
+- **Banner grab (`scan banner <ip> <port>`)** — connects and probes a single port
+  for service identification
+
+Service probing supports 30+ protocol-specific handshakes including HTTP, SSH,
+FTP, Telnet, SMTP, POP3, IMAP, MySQL, PostgreSQL, Redis, MongoDB, MSSQL, RDP,
+VNC, SIP, LDAP, Elasticsearch, Docker, Kubernetes, RTSP, Memcached, and more.
+Unknown services receive a generic `\r\n` nudge to elicit a banner.
+
+Port scan order can be randomized (Fisher-Yates shuffle) to evade sequential
+scan detection.
+
+---
+
+## Network Assessment
+
+[src/net_assess.cpp](src/net_assess.cpp) provides a combined multi-phase network
+assessment that runs four scan types in sequence:
+
+1. **Ping sweep** — ICMP echo to all hosts in range
+2. **ARP scan** — L2 discovery of live hosts
+3. **Port scan + banner grab** — TCP SYN scan of specified ports (default:
+   21, 22, 80, 443) with service identification on open ports
+4. **SNMP discovery** — probes all hosts with community string `public`
+
+```
+ETH> assess 192.168.1.0/24 22,80,443,8080 -r -m
+```
+
+Options:
+- IP range via CIDR notation or explicit start/end addresses
+- Custom port list (comma-separated)
+- `-r` — randomize host iteration and port scan order (Fisher-Yates)
+- `-m` — randomize source MAC per target host (locally-administered unicast,
+  original MAC restored after completion)
+
+The web UI provides a Network Assessment card with CIDR/port inputs and
+checkboxes for randomization options.
+
+---
+
+## MAC Randomization
+
+The tester supports source MAC randomization at multiple levels to reduce
+detectability during scanning operations:
+
+- **Per-operation** — "Random src MAC" checkboxes on Network Scan, Port Scanner,
+  SNMP Scan, and 802.1X web UI cards. When checked, a fresh locally-administered
+  unicast MAC is generated before the operation.
+- **Per-host** — the Network Assessment `-m` flag generates a unique MAC for
+  each target host, then restores the original after the scan completes.
+- **Global default** — `mac autorand on` enables auto-randomization system-wide.
+  When enabled, all per-card checkboxes are pre-checked on page load. This is
+  overridden when the user explicitly sets a MAC address via `mac <XX:...>`.
+
+```
+ETH> mac random            # generate a random MAC now
+ETH> mac autorand on       # enable auto-randomize (persistent, default: off)
+ETH> mac autorand off      # disable
+```
 
 ---
 
@@ -677,6 +768,23 @@ for credential harvesting (authorized pentest use):
   - MS-CHAPv2 auth-challenge / peer-challenge / NT-Response
 - Outputs MS-CHAPv2 hashes in **hashcat mode 5500** format for offline cracking
 - Tracks up to 8 concurrent supplicants
+
+---
+
+## OTA Firmware Updates
+
+[src/ota.cpp](src/ota.cpp) provides over-the-air firmware updates:
+
+- **TFTP** (`ota tftp <server-ip> [filename]`) — fetches a firmware binary from a
+  TFTP server (RFC 1350) and flashes it to the alternate OTA partition. Supports
+  progress display and abort via serial/web.
+- **HTTP upload** (web UI) — direct file upload via the Settings modal. The
+  device accepts a `.bin` file via multipart POST to `/api/ota`, flashes it, and
+  reboots automatically.
+
+The build process generates `ota/firmware.bin` (and a versioned copy) via the
+`ota_copy.py` post-build script. The 16 MB flash uses a dual-OTA partition
+scheme (6.25 MB per slot).
 
 ---
 
@@ -803,7 +911,7 @@ must have NTP time (obtained automatically via Wi-Fi) for cron to function.
 | [src/dhcp_test.cpp](src/dhcp_test.cpp) | DHCP DORA + failure scenarios + rogue server |
 | [src/dhcpv6.cpp](src/dhcpv6.cpp) | DHCPv6 client probe + rogue server (RFC 8415) |
 | [src/dns_tool.cpp](src/dns_tool.cpp) | Unicast DNS resolver + rogue DNS responder |
-| [src/snmp_recon.cpp](src/snmp_recon.cpp) | SNMPv1 community-string probe + sweep |
+| [src/snmp_recon.cpp](src/snmp_recon.cpp) | SNMPv1 community probe + sweep + write test |
 | [src/net_probe.cpp](src/net_probe.cpp) | mDNS resolve + ping reachability |
 | [src/dot1x.cpp](src/dot1x.cpp) | 802.1X supplicant (MD5/TLS/PEAP/TTLS) + EAPOL attacks |
 | [src/rogue_auth.cpp](src/rogue_auth.cpp) | Rogue 802.1X authenticator / EAP credential harvester |
@@ -813,8 +921,10 @@ must have NTP time (obtained automatically via Wi-Fi) for cron to function.
 | [src/arp_tool.cpp](src/arp_tool.cpp) | ARP scan, gratuitous, spoof, storm |
 | [src/fhrp.cpp](src/fhrp.cpp) | FHRP assessment (HSRP/VRRP listen + hijack) |
 | [src/ipv6_tool.cpp](src/ipv6_tool.cpp) | IPv6 NDP listen + rogue RA |
-| [src/portscan.cpp](src/portscan.cpp) | TCP SYN scan + banner grab |
+| [src/portscan.cpp](src/portscan.cpp) | TCP SYN scan + banner grab (30+ services) |
 | [src/recon.cpp](src/recon.cpp) | Passive recon, ping sweep, traceroute |
+| [src/net_assess.cpp](src/net_assess.cpp) | Combined network assessment (ping+ARP+ports+SNMP) |
+| [src/ota.cpp](src/ota.cpp) | OTA firmware updates (TFTP + HTTP stream) |
 | [src/linkdiag.cpp](src/linkdiag.cpp) | Link diagnostics + flap monitor |
 | [src/pcap.cpp](src/pcap.cpp) | PCAP capture to SD card or LittleFS |
 | [src/net_config.cpp](src/net_config.cpp) | NVS persistence (Preferences) |
@@ -851,6 +961,13 @@ Persisted via the `Preferences` library in the **`tester`** namespace
 | `wgPort` | WireGuard peer port | `51820` |
 | `wgEnabled` | WireGuard auto-start | `false` |
 | `uploadUrl` | Default upload server URL | (empty) |
+| `d1xuser` | 802.1X identity | (empty) |
+| `d1xpass` | 802.1X password | (empty) |
+| `d1xmeth` | EAP method (0=MD5, 1=TLS, 2=PEAP, 3=TTLS/PAP, 4=TTLS/MSCHAP) | `0` |
+| `d1xkeypw` | EAP-TLS private key passphrase | (empty) |
+| `d1xtgt` | 802.1X target authenticator MAC | (all-zeros/PAE mcast) |
+| `d1xtgtip` | 802.1X target IP | `0` |
+| `rmacdf` | Auto-randomize source MAC | `false` |
 
 ---
 

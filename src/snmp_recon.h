@@ -26,3 +26,10 @@ bool snmpProbe(W5500Raw &eth, IpStack &ip, uint32_t target,
 // Returns the number of hosts that responded.
 uint32_t snmpSweep(W5500Raw &eth, IpStack &ip, uint32_t startIp, uint32_t endIp,
                    const char *community = "public", uint32_t timeoutMs = 1500);
+
+// Test write access using the given community string. Reads sysContact.0,
+// writes a test value, verifies, then restores the original. Returns true if
+// the write community has SET access.
+bool snmpWriteTest(W5500Raw &eth, IpStack &ip, uint32_t target,
+                   const char *writeCommunity = "private",
+                   uint32_t timeoutMs = 3000);
