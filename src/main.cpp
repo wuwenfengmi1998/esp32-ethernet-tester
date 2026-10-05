@@ -33,11 +33,78 @@ static DhcpTest    dhcp(ipStack, srcMac);
 static CLI         serialCli(eth, inj, rfc, ipStack, dhcp, netCfg, srcMac, dstMac);
 WebControl         web;
 
-// The Waveshare ESP32-S3-POE-ETH has no plain status LED (the onboard LED is a
-// WS2812 RGB on GPIO21). GPIO2 is left free here as a generic status output.
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 2
-#endif
+// =============================================================================
+// Power latch / button + status LED
+// =============================================================================
+static bool powerLatched = false;   // true once POWER_EN self-hold is engaged
+
+static void powerInit()
+{
+    digitalWrite(PIN_POWER_EN, LOW);        // set level before OUTPUT: no glitch
+    pinMode(PIN_POWER_EN, OUTPUT);
+    pinMode(PIN_POWER_BUTTON, INPUT_PULLUP);
+
+    digitalWrite(PIN_STATUS_LED, HIGH);     // active-low: start dark
+    pinMode(PIN_STATUS_LED, OUTPUT);
+}
+
+// When the button is what powers the board, require a POWER_ON_HOLD_MS hold to
+// latch POWER_EN high. If the button is not pressed (USB/external power), boot
+// normally without latching. A release before the hold simply lets the board
+// lose power on battery, or continues booting on external power.
+static void powerOnLatch()
+{
+    if (digitalRead(PIN_POWER_BUTTON) != LOW) return;
+
+    uint32_t pressStart = millis();
+    while (digitalRead(PIN_POWER_BUTTON) == LOW) {
+        if (millis() - pressStart >= POWER_ON_HOLD_MS) {
+            digitalWrite(PIN_POWER_EN, HIGH);
+            powerLatched = true;
+            break;
+        }
+        delay(5);
+    }
+}
+
+// Polled from loop(): blinks the status LED while powered on, and a
+// POWER_OFF_HOLD_MS press releases the latch. The press that latched power on
+// is ignored until it is released.
+static void powerTick()
+{
+    static bool armed = false;      // false until the boot press is released
+    static bool wasDown = false;
+    static uint32_t pressStart = 0;
+    static uint32_t blinkLast = 0;
+
+    if (!powerLatched) {
+        digitalWrite(PIN_STATUS_LED, HIGH);     // off in power-down state
+        return;
+    }
+
+    if (millis() - blinkLast >= LED_BLINK_MS) {
+        blinkLast = millis();
+        digitalWrite(PIN_STATUS_LED, !digitalRead(PIN_STATUS_LED));
+    }
+
+    bool down = (digitalRead(PIN_POWER_BUTTON) == LOW);
+    if (!down) {
+        armed   = true;             // release seen: next press may power off
+        wasDown = false;
+        return;
+    }
+    if (!armed) return;             // still the initial hold that powered us on
+
+    if (!wasDown) {
+        pressStart = millis();
+        wasDown = true;
+    } else if (millis() - pressStart >= POWER_OFF_HOLD_MS) {
+        digitalWrite(PIN_POWER_EN, LOW);
+        digitalWrite(PIN_STATUS_LED, HIGH);     // LED off as we power down
+        powerLatched = false;
+        Serial.println("Powering off...");
+    }
+}
 
 // =============================================================================
 // WireGuard TCP CLI bridge — executes a command and returns captured output
@@ -55,6 +122,11 @@ void wgRunCliCommand(const String &line, String &output)
 // =============================================================================
 void setup()
 {
+    // Power latch: release POWER_EN immediately, then latch it high if the
+    // user holds the power button long enough.
+    powerInit();
+    powerOnLatch();
+
     Serial.begin(CLI_BAUD);
     while (!Serial && millis() < 3000) {}
 
@@ -71,10 +143,10 @@ void setup()
     if (!eth.begin(srcMac)) {
         Serial.println("ERROR: W5500 initialisation failed!");
         Serial.println("Check SPI wiring and RST/CS pins.");
-        // Blink built-in LED to signal fault (non-fatal — keep trying)
-        pinMode(LED_BUILTIN, OUTPUT);
+        // Blink status LED to signal fault (non-fatal — keep trying)
+        pinMode(PIN_STATUS_LED, OUTPUT);
         while (true) {
-            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+            digitalWrite(PIN_STATUS_LED, !digitalRead(PIN_STATUS_LED));
             delay(200);
         }
     }
@@ -133,6 +205,7 @@ void setup()
 // =============================================================================
 void loop()
 {
+    powerTick();                  // Long-press power button to power off
     serialCli.process();          // Read serial input, dispatch commands
     inj.tick();                   // Drive background storm / continuous injection
     serialCli.loopbackTick();     // Reflect frames if loopback mode is on

@@ -93,6 +93,20 @@ static const uint16_t RFC2544_SIZES[]   = { 64, 128, 256, 512, 1024, 1280, 1518 
 #define PIN_SD_SCK      7
 
 // =============================================================================
+// Power Latch / Button
+// POWER_EN high keeps the system powered via its own latch; the button
+// supplies temporary power while pressed and reads low.
+// =============================================================================
+#define PIN_POWER_EN      39    // HIGH = hold system power on, LOW = release
+#define PIN_POWER_BUTTON  38    // Power button, active-low (press = temporary power)
+#define POWER_ON_HOLD_MS  2000  // Hold to latch power on
+#define POWER_OFF_HOLD_MS 3000  // Hold to release latch (power off)
+
+// Status LED, active-low (LOW = lit)
+#define PIN_STATUS_LED    2
+#define LED_BLINK_MS      500   // Blink half-period while powered on
+
+// =============================================================================
 // Error Injection Defaults
 // =============================================================================
 #define INJECT_DEFAULT_COUNT   100     // Frames to send when no count specified
