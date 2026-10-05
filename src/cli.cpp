@@ -25,6 +25,7 @@
 #include "ota.h"
 #include "net_assess.h"
 #include "weblog.h"
+#include "display.h"
 #include <WiFi.h>
 #include <esp_timer.h>
 #include <lwip/sockets.h>
@@ -175,6 +176,7 @@ void CLI::_dispatch(char *line)
     else if (strcasecmp(verb, "upload")    == 0) _cmdUpload(args);
     else if (strcasecmp(verb, "ota")       == 0) _cmdOta(args);
     else if (strcasecmp(verb, "assess")    == 0) _cmdAssess(args);
+    else if (strcasecmp(verb, "display")   == 0) _cmdDisplay(args);
     else if (strcasecmp(verb, "link")     == 0) {
         char *op = args ? strtok(args, " \t") : nullptr;
         char *a1 = strtok(nullptr, " \t");
@@ -361,6 +363,15 @@ void CLI::_cmdHelp()
         "  sd rename <old> <new>            Rename / move a file\r\n"
         "  sd mkdir <path>                  Create a directory\r\n"
         "  sd write <file> <text>           Append a line of text to a file\r\n"
+        "\r\n"
+        "Display (SH1106 128x64 I2C, optional):\r\n"
+        "  display                          Panel info; force status page\r\n"
+        "  display text <row 0-7> <text>    Write a line (pauses auto status page)\r\n"
+        "  display clear                    Blank the display\r\n"
+        "  display on|off                   Panel power\r\n"
+        "  display invert on|off            Invert pixels\r\n"
+        "  display contrast <0-255>         Set contrast\r\n"
+        "  display speed <hz>               Set I2C clock (e.g. 1000000, 400000)\r\n"
         "\r\n"
         "WireGuard VPN:\r\n"
         "  wg                               Show tunnel status and config\r\n"
@@ -2227,6 +2238,84 @@ void CLI::_cmdAssess(char *args)
 
     netAssess(_eth, _ip, _src, startIp, endIp,
               nPorts > 0 ? ports : nullptr, nPorts, flags);
+}
+
+// =============================================================================
+// display -- SH1106 128x64 I2C status display
+// =============================================================================
+void CLI::_cmdDisplay(char *args)
+{
+    char *sub = args ? strtok(args, " \t") : nullptr;
+
+    if (!sub || strcasecmp(sub, "status") == 0) {
+        displayPrintInfo();
+        if (displayAvailable()) {
+            displayShowStatus();
+            Serial.println("  Status page refreshed.");
+        }
+        return;
+    }
+
+    if (!displayAvailable()) {
+        Serial.printf("Display not detected at 0x%02X (SDA %d, SCL %d).\r\n",
+                      DISPLAY_I2C_ADDR, DISPLAY_I2C_SDA, DISPLAY_I2C_SCL);
+        return;
+    }
+
+    if (strcasecmp(sub, "text") == 0) {
+        char *rowArg = strtok(nullptr, " \t");
+        char *text   = strtok(nullptr, "");
+        if (!rowArg || !text) {
+            Serial.println("Usage: display text <row 0-7> <text>");
+            return;
+        }
+        int row = atoi(rowArg);
+        if (row < 0 || row > 7) {
+            Serial.println("Row must be 0..7 (8 rows of 8 pixels).");
+            return;
+        }
+        displayDrawText((uint8_t)row, text);
+        Serial.printf("Display row %d: %s\r\n", row, text);
+    }
+    else if (strcasecmp(sub, "clear") == 0) {
+        displayClear();
+        Serial.println("Display cleared.");
+    }
+    else if (strcasecmp(sub, "on") == 0) {
+        displayOn(true);
+        Serial.println("Display on.");
+    }
+    else if (strcasecmp(sub, "off") == 0) {
+        displayOn(false);
+        Serial.println("Display off.");
+    }
+    else if (strcasecmp(sub, "invert") == 0) {
+        char *a = strtok(nullptr, " \t");
+        if (!a) { Serial.println("Usage: display invert on|off"); return; }
+        bool on = (strcasecmp(a, "on") == 0);
+        displayInvert(on);
+        Serial.printf("Display invert: %s\r\n", on ? "on" : "off");
+    }
+    else if (strcasecmp(sub, "contrast") == 0) {
+        char *a = strtok(nullptr, " \t");
+        if (!a) { Serial.println("Usage: display contrast <0-255>"); return; }
+        long v = strtol(a, nullptr, 0);
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
+        displaySetContrast((uint8_t)v);
+        Serial.printf("Display contrast: %ld\r\n", v);
+    }
+    else if (strcasecmp(sub, "speed") == 0) {
+        char *a = strtok(nullptr, " \t");
+        if (!a) { Serial.println("Usage: display speed <hz>  (e.g. 1000000, 400000)"); return; }
+        displaySetSpeed((uint32_t)strtoul(a, nullptr, 10));
+    }
+    else {
+        Serial.println("Usage: display [status]");
+        Serial.println("       display text <row 0-7> <text>");
+        Serial.println("       display clear | on | off");
+        Serial.println("       display invert on|off | contrast <0-255> | speed <hz>");
+    }
 }
 
 // =============================================================================

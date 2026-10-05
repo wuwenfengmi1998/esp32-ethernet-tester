@@ -107,6 +107,22 @@ static const uint16_t RFC2544_SIZES[]   = { 64, 128, 256, 512, 1024, 1280, 1518 
 #define LED_BLINK_MS      500   // Blink half-period while powered on
 
 // =============================================================================
+// Display: 1.3" 128x64 SH1106 over I2C (SA0 pulled down -> 0x3C)
+// =============================================================================
+#define DISPLAY_I2C_SDA   41
+#define DISPLAY_I2C_SCL   42
+#define DISPLAY_I2C_ADDR  0x3C
+#define DISPLAY_WIDTH     128
+#define DISPLAY_HEIGHT    64
+// 1 MHz overclock (SH1106 datasheet max is 400 kHz). Boot falls back through
+// 400 kHz / 100 kHz if the panel does not ACK. Runtime tuning: display speed <hz>
+#define DISPLAY_I2C_FREQ        1000000UL
+#define DISPLAY_I2C_FREQ_FALLBACK 400000UL
+#define DISPLAY_REFRESH_MS      1000    // Status page refresh period
+#define DISPLAY_COL_OFFSET      2       // SH1106 has 132-column RAM; visible area starts at col 2
+#define DISPLAY_CONTRAST        0x80
+
+// =============================================================================
 // Error Injection Defaults
 // =============================================================================
 #define INJECT_DEFAULT_COUNT   100     // Frames to send when no count specified

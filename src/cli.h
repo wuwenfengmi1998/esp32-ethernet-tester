@@ -115,6 +115,7 @@ private:
     void _cmdSnmp(char *args);
     void _cmdOta(char *args);
     void _cmdAssess(char *args);
+    void _cmdDisplay(char *args);
     bool _requireArmed();
     bool _requireIp();
     void _cmdReboot();

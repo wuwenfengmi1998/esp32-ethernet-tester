@@ -15,6 +15,8 @@
 #include "wg_tunnel.h"
 #include "scripting.h"
 #include "weblog.h"
+#include "display.h"
+#include "net_util.h"
 #include <WiFi.h>
 
 // =============================================================================
@@ -99,6 +101,7 @@ static void powerTick()
         pressStart = millis();
         wasDown = true;
     } else if (millis() - pressStart >= POWER_OFF_HOLD_MS) {
+        displayShutdown();                  // stop refresh, blank + panel off
         digitalWrite(PIN_POWER_EN, LOW);
         digitalWrite(PIN_STATUS_LED, HIGH);     // LED off as we power down
         powerLatched = false;
@@ -138,6 +141,9 @@ void setup()
     // Initialise TF (micro-SD) card for PCAP storage (optional).
     pcapSdInit();
 
+    // Initialise the optional I2C status display (SH1106 128x64).
+    displayBegin();
+
     Serial.println("\r\nInitialising W5500...");
 
     if (!eth.begin(srcMac)) {
@@ -168,6 +174,27 @@ void setup()
         ipStack.setAddress(netCfg.staticIp, netCfg.staticMask, netCfg.staticGw);
         Serial.println("IP: static address applied from NVS.");
     }
+
+    // Status display: live page sourced from the same state as the web UI.
+    displaySetStatusProvider([](DisplayStatus &st) {
+        uint8_t phy = eth.phyCfgr();
+        st.linkUp     = (phy & PHYCFGR_LNK) != 0;
+        st.speed100   = (phy & PHYCFGR_SPD) != 0;
+        st.fullDuplex = (phy & PHYCFGR_DPX) != 0;
+        ipToStr(ipStack.ip(), st.ip);
+        strncpy(st.host, netCfg.hostname, sizeof(st.host) - 1);
+        st.uptimeSec  = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+        st.heapKb     = (uint16_t)(ESP.getFreeHeap() / 1024);
+        st.wifiUp     = WiFi.isConnected();
+        if (st.wifiUp) {
+            IPAddress wip = WiFi.localIP();
+            snprintf(st.wifiIp, sizeof(st.wifiIp), "%u.%u.%u.%u",
+                     (unsigned)wip[0], (unsigned)wip[1],
+                     (unsigned)wip[2], (unsigned)wip[3]);
+        }
+        st.sdPresent  = pcapSdAvailable();
+    });
+    displayShowStatus();
 
     // Wi-Fi + web control interface (auto-connects from NVS or starts AP).
     web.setStatusProvider([]() { return serialCli.statusJson(); });
@@ -213,6 +240,7 @@ void loop()
     web.loop();                   // Execute queued web commands
     cronTick();                   // Check cron scheduler
     wgTcpListenerTick();          // Service WireGuard TCP CLI clients
+    displayTick();                // Refresh status page display (if present)
 
     // Auto-start WireGuard tunnel once Wi-Fi connects
     static bool _wgAutoStarted = false;

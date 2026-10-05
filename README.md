@@ -35,6 +35,7 @@ interface provides remote control with a tabbed multi-panel UI.
 - [OTA Firmware Updates](#ota-firmware-updates)
 - [RFC 2544 Suite](#rfc-2544-suite)
 - [SD Card & File Manager](#sd-card--file-manager)
+- [Status Display (SH1106)](#status-display-sh1106)
 - [WireGuard VPN](#wireguard-vpn)
 - [Scripting & Automation](#scripting--automation)
 - [Architecture](#architecture)
@@ -81,6 +82,7 @@ interface provides remote control with a tabbed multi-panel UI.
 | **Web server** | HTTPS support, basic-auth, on/off control |
 | **Wi-Fi web UI** | Tabbed multi-panel interface with real-time output; STA + AP modes |
 | **PHY control** | Force link speed/duplex: auto, 100FD, 100HD, 10FD, 10HD |
+| **Status display** | Optional 1.3" 128x64 SH1106 OLED over I2C: live link/IP/Wi-Fi/SD/uptime page |
 | **Persistence** | Wi-Fi credentials, hostname, IP config, 802.1X creds, WireGuard keys stored in NVS |
 
 ---
@@ -92,6 +94,7 @@ interface provides remote control with a tabbed multi-panel UI.
 | MCU | Waveshare **ESP32-S3-POE-ETH** (ESP32-S3, USB-C, 16 MB flash, 8 MB PSRAM) |
 | Ethernet | Onboard WIZnet **W5500** (PoE-capable carrier) |
 | Interface | FSPI @ 8 MHz (see note below) |
+| Display (optional) | 1.3" 128x64 **SH1106** OLED over I2C @ 0x3C |
 
 > Ethernet, W5500 power, and (optional) PoE are all onboard — no external
 > wiring is required. The SPI clock is set to **8 MHz** in
@@ -114,6 +117,26 @@ Ethernet wiring is needed. The onboard SPI mapping (defined in
 | CS           | 14            | Chip select |
 | RST          | 9             | Hardware reset |
 | INT          | 10            | Not used in polling mode |
+
+### Optional I2C status display (SH1106 128x64)
+
+A 1.3" SH1106 OLED module can be wired to the free I2C pins. It shows a live
+status page (link speed/duplex, IP, hostname, Wi-Fi IP, SD card, uptime, heap)
+and is controlled with the `display` CLI command. The panel is auto-detected;
+if it does not answer the bus the firmware boots normally without it.
+
+| Display signal | ESP32-S3 GPIO | Notes |
+|----------------|---------------|-------|
+| SDA            | 41            | I2C data |
+| SCL            | 42            | I2C clock |
+| VCC            | 3V3           | Module LDO/level shift |
+| GND            | GND           | |
+| Address        | 0x3C          | SA0 pulled low |
+
+Configuration lives in [include/config.h](include/config.h) (`DISPLAY_*`). The
+bus runs at **1 MHz** by default (SH1106 datasheet max is 400 kHz) and falls
+back to 400 kHz / 100 kHz if the panel does not ACK. If the display shows
+artifacts, lower the clock at runtime with `display speed 400000`.
 
 ---
 
@@ -414,6 +437,17 @@ case-insensitive.
 | `sd rename <old> <new>` | Rename / move a file |
 | `sd mkdir <path>` | Create a directory |
 | `sd write <file> <text>` | Append a line of text to a file |
+
+### Display (SH1106 128x64 I2C, optional)
+| Command | Description |
+|---------|-------------|
+| `display` / `display status` | Show panel info and refresh the status page |
+| `display text <row 0-7> <text>` | Write a text row (pauses auto status page) |
+| `display clear` | Blank the display |
+| `display on` / `display off` | Panel power |
+| `display invert on\|off` | Invert pixels |
+| `display contrast <0-255>` | Set contrast (default 0x80) |
+| `display speed <hz>` | Set I2C clock, e.g. `display speed 400000` |
 
 ### WireGuard VPN
 | Command | Description |
@@ -827,6 +861,34 @@ or `sd format` to erase and format.
 
 ---
 
+## Status Display (SH1106)
+
+An optional 1.3" 128x64 SH1106 OLED on I2C shows a live status page refreshed
+once per second:
+
+```
+ESP32 Ethernet Tester
+FW 1.0.3  00:12:34
+Link: UP 100M full
+IP:   192.168.1.50
+Host: eth-tester
+WiFi: 192.168.1.51
+SD:   present
+Heap: 182 KB
+```
+
+The driver is self-contained ([src/display.cpp](src/display.cpp)): no external
+library, 1 KB framebuffer with dirty-page flushing, and a 5x7 ASCII font. The
+panel is probed at boot on address `0x3C`; if absent, the display API is a
+no-op and boot continues. The I2C bus defaults to 1 MHz with automatic
+fallback to 400 kHz / 100 kHz; tune it at runtime with `display speed <hz>`.
+
+On a long-press power-off the panel is blanked and switched off before the
+power latch (`POWER_EN`) is released, and all further display calls become
+no-ops for the rest of the session.
+
+---
+
 ## WireGuard VPN
 
 The device can establish a WireGuard tunnel over Wi-Fi for secure remote
@@ -873,10 +935,10 @@ must have NTP time (obtained automatically via Wi-Fi) for cron to function.
 
 ```
                        ┌─────────────────────────────────────────────┐
-                       │                  main.cpp                    │
-                       │  setup(): init, NVS load, Wi-Fi, web         │
-                       │  loop():  CLI · inj.tick · loopback ·         │
-                       │           advertise · web                    │
+                       │                  main.cpp                   │
+                       │  setup(): init, NVS, Wi-Fi, web, display    │
+                       │  loop():  CLI · inj.tick · loopback ·       │
+                       │           advertise · web · display.tick    │
                        └───────────────┬─────────────────────────────┘
                                        │
         ┌───────────┬───────────┬──────┴──────┬────────────┬───────────┐
@@ -927,6 +989,7 @@ must have NTP time (obtained automatically via Wi-Fi) for cron to function.
 | [src/ota.cpp](src/ota.cpp) | OTA firmware updates (TFTP + HTTP stream) |
 | [src/linkdiag.cpp](src/linkdiag.cpp) | Link diagnostics + flap monitor |
 | [src/pcap.cpp](src/pcap.cpp) | PCAP capture to SD card or LittleFS |
+| [src/display.cpp](src/display.cpp) | SH1106 128x64 I2C driver + status page |
 | [src/net_config.cpp](src/net_config.cpp) | NVS persistence (Preferences) |
 | [src/wifi_web.cpp](src/wifi_web.cpp) | Wi-Fi STA/AP + ESPAsyncWebServer tabbed UI |
 | [src/weblog.cpp](src/weblog.cpp) | TeeStream ring buffer for web output capture |
@@ -1022,3 +1085,11 @@ or assign a static IP before using these tools.
 ### DHCP / probe commands do nothing useful
 These depend on the W5500 being initialised and the link being up. Resolve any
 W5500 init failure first, then confirm `status` shows **Link: UP**.
+
+### Display stays blank / shows artifacts
+- Check boot log for `[DISP] SH1106 not found at 0x3C` -- verify SDA 41, SCL 42,
+  3.3 V power, and that the module's SA0 strap selects 0x3C.
+- If the panel initialises but shows ghosting/offset pixels, the 1 MHz I2C
+  overclock is marginal: run `display speed 400000`.
+- If the image is shifted horizontally, adjust `DISPLAY_COL_OFFSET` in
+  [include/config.h](include/config.h) (SH1106 has 132-column RAM; 2 is typical).
