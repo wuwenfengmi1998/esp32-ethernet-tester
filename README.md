@@ -83,6 +83,7 @@ interface provides remote control with a tabbed multi-panel UI.
 | **Wi-Fi web UI** | Tabbed multi-panel interface with real-time output; STA + AP modes |
 | **PHY control** | Force link speed/duplex: auto, 100FD, 100HD, 10FD, 10HD |
 | **Status display** | Optional 1.3" 128x64 SH1106 OLED over I2C: live link/IP/Wi-Fi/SD/uptime page |
+| **Battery monitor** | Optional single-cell Li-ion: voltage/percent on the display, charge detect, 3.3 V auto power-off |
 | **Persistence** | Wi-Fi credentials, hostname, IP config, 802.1X creds, WireGuard keys stored in NVS |
 
 ---
@@ -95,6 +96,7 @@ interface provides remote control with a tabbed multi-panel UI.
 | Ethernet | Onboard WIZnet **W5500** (PoE-capable carrier) |
 | Interface | FSPI @ 8 MHz (see note below) |
 | Display (optional) | 1.3" 128x64 **SH1106** OLED over I2C @ 0x3C |
+| Battery (optional) | Single-cell Li-ion monitor: GPIO1 ADC (0.5 divider), GPIO40 charge detect |
 
 > Ethernet, W5500 power, and (optional) PoE are all onboard — no external
 > wiring is required. The SPI clock is set to **8 MHz** in
@@ -867,7 +869,7 @@ An optional 1.3" 128x64 SH1106 OLED on I2C shows a live status page refreshed
 once per second:
 
 ```
-ESP32 Ethernet Tester
+BAT 3.97V 62%
 FW 1.0.3  00:12:34
 Link: UP 100M full
 IP:   192.168.1.50
@@ -876,6 +878,9 @@ WiFi: 192.168.1.51
 SD:   present
 Heap: 182 KB
 ```
+
+The first line shows the battery (`CHARGING` while the charger is connected,
+otherwise voltage and linear 3.3–4.2 V percentage).
 
 The driver is self-contained ([src/display.cpp](src/display.cpp)): no external
 library, 1 KB framebuffer with dirty-page flushing, and a 5x7 ASCII font. The
@@ -886,6 +891,25 @@ fallback to 400 kHz / 100 kHz; tune it at runtime with `display speed <hz>`.
 On a long-press power-off the panel is blanked and switched off before the
 power latch (`POWER_EN`) is released, and all further display calls become
 no-ops for the rest of the session.
+
+### Optional battery monitor
+
+A single-cell Li-ion (4.2 V) battery can be monitored through a 0.5 voltage
+divider into GPIO1; the charger's status output drives GPIO40 (configured as
+input pull-down, **HIGH = charging**). The status display shows the battery on
+its first line (`CHARGING` while charging, otherwise `BAT 3.97V 62%`, linear
+3.3–4.2 V mapping).
+
+When not charging, three consecutive 1 Hz samples at or below **3.3 V** trigger
+an automatic power-off: the display is blanked, `POWER_EN` is released, and the
+cell is protected from over-discharge. Charging is exempt so a deeply
+discharged battery can recover. Thresholds live in
+[include/config.h](include/config.h) (`BAT_*`).
+
+| Battery signal | ESP32-S3 GPIO | Notes |
+|----------------|---------------|-------|
+| VBAT sense     | 1             | ADC1_CH0, through 0.5 divider |
+| Charge detect  | 40            | Input pull-down; HIGH while charging |
 
 ---
 
@@ -990,6 +1014,7 @@ must have NTP time (obtained automatically via Wi-Fi) for cron to function.
 | [src/linkdiag.cpp](src/linkdiag.cpp) | Link diagnostics + flap monitor |
 | [src/pcap.cpp](src/pcap.cpp) | PCAP capture to SD card or LittleFS |
 | [src/display.cpp](src/display.cpp) | SH1106 128x64 I2C driver + status page |
+| [src/battery.cpp](src/battery.cpp) | Li-ion monitor (ADC + charge detect) + low-voltage cutoff |
 | [src/net_config.cpp](src/net_config.cpp) | NVS persistence (Preferences) |
 | [src/wifi_web.cpp](src/wifi_web.cpp) | Wi-Fi STA/AP + ESPAsyncWebServer tabbed UI |
 | [src/weblog.cpp](src/weblog.cpp) | TeeStream ring buffer for web output capture |

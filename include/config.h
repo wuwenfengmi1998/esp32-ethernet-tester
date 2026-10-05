@@ -107,6 +107,18 @@ static const uint16_t RFC2544_SIZES[]   = { 64, 128, 256, 512, 1024, 1280, 1518 
 #define LED_BLINK_MS      500   // Blink half-period while powered on
 
 // =============================================================================
+// Battery Monitor (single-cell Li-ion, 4.2 V max)
+// VBAT --[0.5 divider]--> PIN_BAT_ADC;  charge detect HIGH = charging
+// =============================================================================
+#define PIN_BAT_ADC        1      // ADC1_CH0
+#define BAT_DIVIDER_RATIO  0.5f   // Vadc = Vbat * 0.5 -> Vbat = Vadc * 2
+#define PIN_CHG_DETECT     40     // input pull-down; HIGH while charging
+#define BAT_FULL_MV        4200
+#define BAT_EMPTY_MV       3300
+#define BAT_CUTOFF_MV      3300   // auto power-off threshold
+#define BAT_CUTOFF_COUNT   3      // consecutive 1 Hz samples below threshold
+
+// =============================================================================
 // Display: 1.3" 128x64 SH1106 over I2C (SA0 pulled down -> 0x3C)
 // =============================================================================
 #define DISPLAY_I2C_SDA   41

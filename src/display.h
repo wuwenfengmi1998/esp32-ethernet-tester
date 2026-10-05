@@ -32,6 +32,9 @@ struct DisplayStatus {
     bool     wifiUp;        // Wi-Fi station connected
     char     wifiIp[16];    // Wi-Fi IP ("0.0.0.0" if none)
     bool     sdPresent;     // TF/SD card mounted
+    bool     charging;      // battery charger connected (charge detect high)
+    uint16_t batteryMv;     // battery voltage in mV
+    uint8_t  batteryPct;    // battery charge 0..100
 };
 
 typedef void (*DisplayStatusFn)(DisplayStatus &);

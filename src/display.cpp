@@ -271,7 +271,15 @@ static void _renderStatus()
     char line[32];
     char up[24];
 
-    _drawStr(0, 0, "ESP32 Ethernet Tester");
+    if (st.charging) {
+        _drawStr(0, 0, "CHARGING");
+    } else {
+        snprintf(line, sizeof(line), "BAT %u.%02uV %u%%",
+                 (unsigned)(st.batteryMv / 1000),
+                 (unsigned)((st.batteryMv % 1000) / 10),
+                 (unsigned)st.batteryPct);
+        _drawStr(0, 0, line);
+    }
 
     _formatUptime(st.uptimeSec, up, sizeof(up));
     snprintf(line, sizeof(line), "FW %s  %s", FW_VERSION, up);

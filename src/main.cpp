@@ -16,6 +16,7 @@
 #include "scripting.h"
 #include "weblog.h"
 #include "display.h"
+#include "battery.h"
 #include "net_util.h"
 #include <WiFi.h>
 
@@ -69,6 +70,17 @@ static void powerOnLatch()
     }
 }
 
+// Release the power latch after blanking the display. Shared by the
+// power-button long press and the low-battery cut-off.
+static void powerOff(const char *reason)
+{
+    displayShutdown();                  // stop refresh, blank + panel off
+    digitalWrite(PIN_POWER_EN, LOW);
+    digitalWrite(PIN_STATUS_LED, HIGH); // active-low: LED off as we power down
+    powerLatched = false;
+    Serial.printf("Powering off (%s)...\r\n", reason);
+}
+
 // Polled from loop(): blinks the status LED while powered on, and a
 // POWER_OFF_HOLD_MS press releases the latch. The press that latched power on
 // is ignored until it is released.
@@ -101,11 +113,7 @@ static void powerTick()
         pressStart = millis();
         wasDown = true;
     } else if (millis() - pressStart >= POWER_OFF_HOLD_MS) {
-        displayShutdown();                  // stop refresh, blank + panel off
-        digitalWrite(PIN_POWER_EN, LOW);
-        digitalWrite(PIN_STATUS_LED, HIGH);     // LED off as we power down
-        powerLatched = false;
-        Serial.println("Powering off...");
+        powerOff("button hold");
     }
 }
 
@@ -141,7 +149,8 @@ void setup()
     // Initialise TF (micro-SD) card for PCAP storage (optional).
     pcapSdInit();
 
-    // Initialise the optional I2C status display (SH1106 128x64).
+    // Battery monitor (ADC + charge detect) and optional I2C status display.
+    batteryInit();
     displayBegin();
 
     Serial.println("\r\nInitialising W5500...");
@@ -193,6 +202,9 @@ void setup()
                      (unsigned)wip[2], (unsigned)wip[3]);
         }
         st.sdPresent  = pcapSdAvailable();
+        st.charging   = batteryCharging();
+        st.batteryMv  = (uint16_t)batteryVoltageMv();
+        st.batteryPct = batteryPercent();
     });
     displayShowStatus();
 
@@ -233,6 +245,10 @@ void setup()
 void loop()
 {
     powerTick();                  // Long-press power button to power off
+    batteryTick();                // 1 Hz battery sample + low-voltage debounce
+    if (powerLatched && batteryLow()) {
+        powerOff("battery low");  // Protect the cell: ~3.3 V and not charging
+    }
     serialCli.process();          // Read serial input, dispatch commands
     inj.tick();                   // Drive background storm / continuous injection
     serialCli.loopbackTick();     // Reflect frames if loopback mode is on
